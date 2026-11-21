@@ -85,6 +85,7 @@ Things to try:
 | `scripts/fake_events.py` | Sends extra random events straight into app_server (handy for PWA-only work). |
 | `scripts/smoke_test.sh` | Full end-to-end check (also runs in CI). |
 | `scripts/laptop/brim_test.py photo.jpg` | The hat's detector on photos (same model, input and outputs). |
+| `scripts/laptop/traffic_live.py` | Live traffic light test: opens the webcam, you show it a light, it shows the box, colour and what the hat would say. Nothing is saved. |
 | `scripts/test_traffic.py` | Traffic light feasibility test on labelled photos in `data/traffic_test/` (git-ignored); `--self-test` checks the colour check alone. Lab only, never near roads. |
 | `cd device && ctest --preset host` | C++ unit tests: schema, detection geometry, privacy, speak queue, SQLite layer, REST API. |
 | `cd app && npm test && npm run lint && npm run typecheck` | PWA tests, jsx-a11y lint, types. |
