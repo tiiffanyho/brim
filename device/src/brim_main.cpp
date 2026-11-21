@@ -41,6 +41,7 @@
 #include "common/timing.hpp"
 #include "detect/detector.hpp"
 #include "ipc/bus.hpp"
+#include "nav/nav.hpp"
 #include "safety/safety_monitor.hpp"
 
 using namespace brim;
@@ -252,6 +253,7 @@ class FakeVad final : public audio::VoiceActivity {
 void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::SafetyMonitor& safety_mon,
                    std::int64_t hang_after_ms) {
   FakeScenario fake(c);
+  nav::Navigator navigator(c.nav, c.safety.min_confidence);
   detect::TrackStore tracks(c.safety.track_forget_s * 1000, c.safety.repeat_suppress_s * 1000,
                             static_cast<float>(c.detect.track_match_iou), c.detect.track_match_window_ms,
                             static_cast<float>(c.detect.track_center_gate));
@@ -367,12 +369,16 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       c.say(audio::Priority::Safety, alert.text, frame.t_capture_mono_ms);
     }
 
-    // 2. Navigation: the safest direction to move, or "Path unclear, stop".
-    // `dets` holds this frame's people, obstacles and phones, each with a track id.
-    // TODO(ai): src/nav turns `dets` + NavThresholds into a ClearPathEvent and speaks it at
-    //   Priority::Nav, right after the safety alert that made it necessary. Until it exists brim
-    //   says nothing about direction rather than guessing one (rule: never give a direction we are
-    //   not sure of).
+    // 2. Navigation: the safest direction to move, or "Path unclear, stop". It runs after the
+    //    safety alerts above, so a direction is never queued before the warning that made it
+    //    necessary, and it only speaks once a call is confirmed over a few frames.
+    if (auto path = navigator.update(dets, now)) {
+      path->t_capture_mono_ms = frame.t_capture_mono_ms;
+      const std::string text = path->text;
+      c.emit(*path, frame.t_capture_mono_ms);
+      c.say(audio::Priority::Nav, text, frame.t_capture_mono_ms);
+      BRIM_LOGI("nav", "%s", text.c_str());
+    }
 
     // 3. Everything else, lowest priority, rate-limited per track.
     for (const auto& d : dets) {
