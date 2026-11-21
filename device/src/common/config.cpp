@@ -95,6 +95,60 @@ DetectConfig load_detect(const std::string& path) {
   return c;
 }
 
+namespace {
+// [[lo, hi], ...] with 0 <= lo <= hi <= 179. Anything malformed keeps the defaults: a broken
+// config must never make every pixel "red".
+bool read_hue_ranges(const json::Value& j, std::string_view key, std::vector<HueRange>& out) {
+  const json::Value* a = j.find(key);
+  if (!a) return true;
+  if (!a->is_array() || a->as_array().empty()) return false;
+  std::vector<HueRange> v;
+  for (const auto& r : a->as_array()) {
+    if (!r.is_array() || r.as_array().size() != 2 || !r.as_array()[0].is_number() || !r.as_array()[1].is_number())
+      return false;
+    HueRange h{static_cast<int>(r.as_array()[0].as_int()), static_cast<int>(r.as_array()[1].as_int())};
+    if (h.lo < 0 || h.hi > 179 || h.lo > h.hi) return false;
+    v.push_back(h);
+  }
+  out = std::move(v);
+  return true;
+}
+}  // namespace
+
+TrafficConfig load_traffic(const std::string& path) {
+  TrafficConfig c;
+  std::string err;
+  auto j = json::parse_file(path, &err);
+  if (!j || !j->is_object()) {
+    BRIM_LOGW("config", "using default traffic config, cue off (%s)", err.c_str());
+    return c;
+  }
+  c.cue_enabled = j->get_bool("cue_enabled", c.cue_enabled);
+  c.min_score = j->get_number("min_score", c.min_score);
+  c.cue_interval_ms = j->get_int("cue_interval_s", c.cue_interval_ms / 1000) * 1000;
+  c.min_bright = static_cast<int>(j->get_int("min_bright", c.min_bright));
+  c.min_saturation = static_cast<int>(j->get_int("min_saturation", c.min_saturation));
+  c.min_share = j->get_number("min_share", c.min_share);
+  c.min_dominance = j->get_number("min_dominance", c.min_dominance);
+  const TrafficConfig def;
+  if (!read_hue_ranges(*j, "red_hue", c.red_hue)) {
+    BRIM_LOGW("config", "traffic.json red_hue is malformed; using defaults");
+    c.red_hue = def.red_hue;
+  }
+  if (!read_hue_ranges(*j, "green_hue", c.green_hue)) {
+    BRIM_LOGW("config", "traffic.json green_hue is malformed; using defaults");
+    c.green_hue = def.green_hue;
+  }
+  // Floors: one cue per light per 10 s at most, and a colour needs a real share of the box.
+  if (c.cue_interval_ms < 10000) c.cue_interval_ms = 10000;
+  if (c.min_score < 0.3 || c.min_score > 1) c.min_score = def.min_score;
+  if (c.min_share <= 0 || c.min_share > 1) c.min_share = def.min_share;
+  if (c.min_dominance < 1) c.min_dominance = def.min_dominance;
+  if (c.min_bright < 0 || c.min_bright > 255) c.min_bright = def.min_bright;
+  if (c.min_saturation < 0 || c.min_saturation > 255) c.min_saturation = def.min_saturation;
+  return c;
+}
+
 schema::Settings default_settings() {
   schema::Settings s;
   s.volume = 80;

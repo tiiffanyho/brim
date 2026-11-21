@@ -61,6 +61,7 @@ add_library(brim_pipeline STATIC
   src/capture/camera.cpp
   src/detect/detector.cpp
   src/detect/tflite_detector.cpp
+  src/detect/traffic_light.cpp
   src/safety/safety_monitor.cpp
   src/nav/nav.cpp
   src/audio/speak_queue.cpp
@@ -148,6 +149,7 @@ if(BRIM_BUILD_TESTS)
   brim_test(test_privacy brim_pipeline)
   brim_test(test_detect brim_pipeline)
   brim_test(test_nav brim_pipeline)
+  brim_test(test_traffic brim_pipeline)
   if(BRIM_BUILD_APP_SERVER)
     brim_test(test_db brim_db)
     brim_test(test_api brim_api)

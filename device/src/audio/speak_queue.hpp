@@ -3,9 +3,9 @@
 // app_server in priority order. The phone's screen reader speaks them.
 //
 // Rules (unit-tested in tests/test_speak_queue.cpp):
-//   1. Priority: Safety (safety_alert, fault) > Nav (clear_path) > Info (person_seen,
-//      obstacle_seen). FIFO within a priority. A direction is never sent before the warning that
-//      made it necessary.
+//   1. Priority: Safety (safety_alert, fault) > Nav (clear_path; traffic_light_seen in the
+//      feasibility test) > Info (person_seen, obstacle_seen). FIFO within a priority. A direction
+//      is never sent before the warning that made it necessary.
 //   2. Safety cues are never dropped for age and never rate-limited.
 //   3. Nav and Info cues older than info_max_age_ms (3 s) are dropped, never sent late: a stale
 //      "step right" is worse than none.
@@ -35,7 +35,7 @@ const char* to_string(Priority p);
 
 // The events that carry something for the phone to say.
 using CueEvent = std::variant<schema::SafetyAlertEvent, schema::FaultEvent, schema::ClearPathEvent,
-                              schema::PersonSeenEvent, schema::ObstacleSeenEvent>;
+                              schema::PersonSeenEvent, schema::ObstacleSeenEvent, schema::TrafficLightSeenEvent>;
 
 struct SpeechItem {
   Priority priority = Priority::Info;

@@ -1,0 +1,12 @@
+{
+  "_comment": "Traffic light FEASIBILITY TEST (branch feat/traffic-light-test), not a crossing feature. Brim never says walk, cross, go or safe to cross; it only reports 'Traffic light ahead, red|green|colour unknown', at navigation priority, at most once per light every cue_interval_s, and never with a direction. cue_enabled stays false until scripts/test_traffic.py passes. Colour check on the box crop, OpenCV HSV units (H 0-179, S and V 0-255): a pixel counts for a colour when V >= min_bright, S >= min_saturation and H is inside one of that colour's hue ranges [lo, hi] (inclusive). The colour with more pixels wins only if it covers at least min_share of the box AND has at least min_dominance times the other colour's pixels; otherwise 'unknown'. Amber/yellow falls between the ranges and is reported as unknown. min_score: detector score a traffic light needs before it is reported at all. Read by device/src/common/config.cpp and scripts/test_traffic.py.",
+  "cue_enabled": false,
+  "min_score": 0.6,
+  "cue_interval_s": 10,
+  "min_bright": 160,
+  "min_saturation": 90,
+  "min_share": 0.05,
+  "min_dominance": 2.0,
+  "red_hue": [[0, 10], [165, 179]],
+  "green_hue": [[40, 95]]
+}

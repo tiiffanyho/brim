@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "common/json.hpp"
 #include "events.gen.hpp"
@@ -45,6 +46,24 @@ struct DetectConfig {
   int stats_period_s = 5;                  // how often brim logs per-stage detect timings
 };
 
+// Traffic light feasibility test (config/traffic.json). Not a crossing feature: Brim only ever says
+// "Traffic light ahead, red|green|colour unknown" — never walk, cross, go or safe to cross.
+// Colour thresholds are OpenCV HSV units: H 0-179, S and V 0-255.
+struct HueRange {
+  int lo = 0, hi = 0;  // inclusive
+};
+struct TrafficConfig {
+  bool cue_enabled = false;              // off until scripts/test_traffic.py passes
+  double min_score = 0.60;               // detector score before a traffic light is reported at all
+  std::int64_t cue_interval_ms = 10000;  // at most one cue per light this often
+  int min_bright = 160;                  // V: only lit pixels count
+  int min_saturation = 90;               // S: white glare has no colour
+  double min_share = 0.05;               // the winning colour must cover this much of the box
+  double min_dominance = 2.0;            // ... and have this many times the other colour's pixels
+  std::vector<HueRange> red_hue{{0, 10}, {165, 179}};
+  std::vector<HueRange> green_hue{{40, 95}};
+};
+
 struct AppConfig {
   std::string data_dir = "data";            // SQLite DB only (never frames, never audio of people)
   std::string run_dir = "/tmp/brim";        // UDS sockets on host
@@ -60,6 +79,7 @@ SafetyThresholds load_safety(const std::string& path);
 NavThresholds load_nav(const std::string& path);
 AppConfig load_app(const std::string& path);
 DetectConfig load_detect(const std::string& path);
+TrafficConfig load_traffic(const std::string& path);
 std::string config_dir();
 
 // The one definition of the wearer's default settings, shared by brim (before app_server has sent
