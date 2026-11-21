@@ -1,13 +1,21 @@
 // Turns events into short sentences for screen readers. Pure functions (unit-tested).
+// Phrases are kept short: the wearer hears them while walking.
 import type { BrimEvent, Direction, ObstacleKind, Proximity } from "@schema";
+import type { Tier } from "./speech";
 
 export type Politeness = "polite" | "assertive";
 export interface Announcement {
   text: string;
+  /** assertive only for safety_alert (it interrupts); polite for everything else. */
   politeness: Politeness;
-  /** Same key within the dedupe window is not re-announced. */
+  /** When it is said: see speech.ts. */
+  tier: Tier;
+  /** Same key within the dedupe window is not re-announced (never applied to alert or nav). */
   key: string;
 }
+
+/** Longer device messages are replaced by a short generic phrase. */
+const MAX_FAULT_WORDS = 6;
 
 export function directionWords(d: Direction): string {
   switch (d) {
@@ -56,37 +64,33 @@ function sentence(subject: string, d: Direction, p: Proximity): string {
   return `${subject}${parts.length ? ` ${parts.join(", ")}` : ""}.`;
 }
 
-/** Which events should be spoken by the phone's screen reader, and how urgently. */
+/** Which events the phone says, and how urgently. */
 export function describeEvent(e: BrimEvent): Announcement | null {
   switch (e.type) {
     case "safety_alert":
-      return {
-        text: `${e.severity === "critical" ? "Warning: " : ""}${e.text}.`,
-        politeness: e.severity === "info" ? "polite" : "assertive",
-        key: `safety:${e.kind}:${e.text}`,
-      };
+      return { text: `${e.text}.`, politeness: "assertive", tier: "alert", key: `safety:${e.kind}:${e.text}` };
     case "clear_path":
-      // Navigation advice: said right after the warning that made it necessary, so it must not be
-      // suppressed into silence — but "Path unclear, stop" is the urgent one.
-      return {
-        text: `${e.text}.`,
-        politeness: e.clear ? "polite" : "assertive",
-        key: `path:${e.clear ? e.direction : "unclear"}`,
-      };
+      // Said as soon as it arrives (right after the warning that made it necessary), never deduped.
+      return { text: `${e.text}.`, politeness: "polite", tier: "nav", key: `path:${e.clear ? e.direction : "unclear"}` };
     case "person_seen":
-      return { text: sentence("Person", e.direction, e.proximity), politeness: "polite", key: `person:${e.track_id}` };
+      return { text: sentence("Person", e.direction, e.proximity), politeness: "polite", tier: "info", key: `person:${e.track_id}` };
     case "obstacle_seen":
       return {
         text: sentence(obstacleWords(e.label), e.direction, e.proximity),
         politeness: "polite",
+        tier: "info",
         key: `obstacle:${e.label}:${e.direction}`,
       };
     case "fault":
-      if (e.action === "restarting") return { text: "Hat is restarting its camera system.", politeness: "polite", key: "fault:restarting" };
-      if (e.action === "recovered") return { text: "Hat is working again.", politeness: "polite", key: "fault:recovered" };
-      if (e.action === "degraded") return { text: `Hat problem: ${e.message}.`, politeness: "assertive", key: `fault:${e.component}` };
+      if (e.action === "restarting") return { text: "Brim is restarting.", politeness: "polite", tier: "status", key: "fault:restarting" };
+      if (e.action === "recovered") return { text: "Brim is working again.", politeness: "polite", tier: "status", key: "fault:recovered" };
+      if (e.action === "degraded") {
+        const msg = e.message.trim().replace(/[.!]+$/, "");
+        const short = msg && msg.split(/\s+/).length <= MAX_FAULT_WORDS ? msg : "Brim has a problem";
+        return { text: `${short}.`, politeness: "polite", tier: "status", key: `fault:${e.component}` };
+      }
       return null;
-    case "health": // far too chatty for a live region
+    case "health": // far too chatty to say
       return null;
   }
 }
