@@ -47,6 +47,9 @@ NavThresholds load_nav(const std::string& path) {
   c.clear_min_width_frac = j->get_number("clear_min_width_frac", c.clear_min_width_frac);
   c.clear_max_area_frac = j->get_number("clear_max_area_frac", c.clear_max_area_frac);
   c.decision_hold_ms = j->get_int("decision_hold_ms", c.decision_hold_ms);
+  c.confirm_frames = static_cast<int>(j->get_int("confirm_frames", c.confirm_frames));
+  if (c.confirm_frames < 2) c.confirm_frames = 2;  // one frame is a blip, never a call
+  if (c.confirm_frames > 3) c.confirm_frames = 3;
   return c;
 }
 

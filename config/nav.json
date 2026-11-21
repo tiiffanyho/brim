@@ -1,7 +1,8 @@
 {
-  "_comment": "Navigation thresholds: how the frame is split into left/ahead/right and how sure we must be before naming a direction. When nothing clears these bars brim says 'Path unclear, stop' instead of guessing. Filled in by the navigation phase; loaded by device/src/common/config.cpp.",
+  "_comment": "Navigation thresholds: how the frame is split into left/ahead/right and how sure we must be before naming a direction. When nothing clears these bars brim says 'Path unclear, stop' instead of guessing. Corridor = middle band (side_margin_frac) of the lower half of the frame. A box blocks only if its area fraction is above clear_max_area_frac (no distance sensor). A side is clear when blocking boxes leave at least clear_min_width_frac of the frame width free in it. A call needs confirm_frames (2-3) matching frames and is held for decision_hold_ms. Loaded by device/src/common/config.cpp.",
   "side_margin_frac": 0.33,
   "clear_min_width_frac": 0.25,
   "clear_max_area_frac": 0.04,
-  "decision_hold_ms": 1500
+  "decision_hold_ms": 1500,
+  "confirm_frames": 3
 }
