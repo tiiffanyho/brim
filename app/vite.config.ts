@@ -20,6 +20,12 @@ export default defineConfig({
       "/ws": { target: appServer.replace(/^http/, "ws"), ws: true },
     },
   },
-  build: { outDir: "dist", sourcemap: true, target: "es2020" },
+  build: {
+    outDir: "dist",
+    sourcemap: true,
+    target: "es2020",
+    // Bake the Figtree font into the CSS: app_server's static mount may not know the .woff2 type.
+    assetsInlineLimit: (file) => (file.endsWith(".woff2") ? true : undefined),
+  },
   test: { environment: "node", include: ["src/**/*.test.ts"] },
 });
