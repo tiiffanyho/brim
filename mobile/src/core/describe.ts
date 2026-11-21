@@ -65,14 +65,24 @@ function sentence(subject: string, d: Direction, p: Proximity): string {
   return `${subject}${parts.length ? ` ${parts.join(", ")}` : ""}.`;
 }
 
+/**
+ * Names an enrolled person (on-device face match, agreed by the team): "Person ahead, move left"
+ * + "Tiffany" -> "Tiffany ahead, move left". Only "Person ahead ..." phrases and plain names;
+ * anyone not enrolled has no name and stays "Person".
+ */
+export function withName(text: string, name?: string): string {
+  if (!name || !/^[A-Za-z][A-Za-z' -]{0,31}$/.test(name) || !text.startsWith("Person ahead")) return text;
+  return name + text.slice("Person".length);
+}
+
 /** Which events the phone says, and how urgently. */
 export function describeEvent(e: BrimEvent): Announcement | null {
   switch (e.type) {
     case "safety_alert":
-      return { text: `${e.text}.`, politeness: "assertive", tier: "alert", key: `safety:${e.kind}:${e.text}` };
+      return { text: `${withName(e.text, e.name)}.`, politeness: "assertive", tier: "alert", key: `safety:${e.kind}:${e.text}` };
     case "clear_path":
       // Said as soon as it arrives (right after the warning that made it necessary), never deduped.
-      return { text: `${e.text}.`, politeness: "polite", tier: "nav", key: `path:${e.clear ? e.direction : "unclear"}` };
+      return { text: `${withName(e.text, e.name)}.`, politeness: "polite", tier: "nav", key: `path:${e.clear ? e.direction : "unclear"}` };
     case "person_seen":
       return { text: sentence("Person", e.direction, e.proximity), politeness: "polite", tier: "info", key: `person:${e.track_id}` };
     case "obstacle_seen":
