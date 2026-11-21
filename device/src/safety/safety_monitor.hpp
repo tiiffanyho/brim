@@ -29,9 +29,12 @@ class SafetyMonitor {
   // Returns alerts for this frame (the caller stamps seq/source/t_mono_ms). `nav_now` is the
   // navigation call that currently stands (nav::Navigator::current(), nullptr while unsure): a
   // close warning says that call's clear side, or stop when there is none.
+  // `subjects`, if given, gets one entry per alert: the track id of the box it is about (-1 = none),
+  // so an enrolled person can be named.
   virtual std::vector<schema::SafetyAlertEvent> check(const capture::Frame& frame,
                                                       const std::vector<detect::Detection>& dets,
-                                                      const nav::FrameDecision* nav_now) = 0;
+                                                      const nav::FrameDecision* nav_now,
+                                                      std::vector<int>* subjects = nullptr) = 0;
 };
 
 std::unique_ptr<SafetyMonitor> make_stub_safety_monitor();

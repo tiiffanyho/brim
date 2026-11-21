@@ -15,7 +15,8 @@ class StubSafetyMonitor final : public SafetyMonitor {
  public:
   bool healthy() const override { return true; }
   std::vector<s::SafetyAlertEvent> check(const capture::Frame&, const std::vector<Detection>&,
-                                         const nav::FrameDecision*) override {
+                                         const nav::FrameDecision*, std::vector<int>* subjects) override {
+    if (subjects) subjects->clear();
     return {};
   }
 };
@@ -30,8 +31,9 @@ class VisionSafetyMonitor final : public SafetyMonitor {
   bool healthy() const override { return true; }
 
   std::vector<s::SafetyAlertEvent> check(const capture::Frame& frame, const std::vector<Detection>& dets,
-                                         const nav::FrameDecision* nav_now) override {
+                                         const nav::FrameDecision* nav_now, std::vector<int>* subjects) override {
     std::vector<s::SafetyAlertEvent> out;
+    if (subjects) subjects->clear();
     const std::int64_t now = frame.t_capture_mono_ms;
     // The closest (biggest) thing close in front, people and objects judged separately.
     const Detection* person = nullptr;
@@ -45,8 +47,10 @@ class VisionSafetyMonitor final : public SafetyMonitor {
       const Detection*& slot = is_person ? person : object;
       if (!slot || d.box.area() > slot->box.area()) slot = &d;
     }
-    track(person_, person, now, s::SafetyKind::PersonClose, s::Severity::Critical, nav_now, out);
-    track(object_, object, now, s::SafetyKind::ObjectClose, s::Severity::Warning, nav_now, out);
+    if (track(person_, person, now, s::SafetyKind::PersonClose, s::Severity::Critical, nav_now, out) && subjects)
+      subjects->push_back(person->track_id);
+    if (track(object_, object, now, s::SafetyKind::ObjectClose, s::Severity::Warning, nav_now, out) && subjects)
+      subjects->push_back(object->track_id);
     return out;
   }
 
@@ -61,14 +65,15 @@ class VisionSafetyMonitor final : public SafetyMonitor {
     return lower_half && d.box.x < 1.0 - margin_ && d.box.x + d.box.w > margin_;
   }
 
-  void track(Watch& w, const Detection* d, std::int64_t now, s::SafetyKind kind, s::Severity sev,
+  // True when an alert was added.
+  bool track(Watch& w, const Detection* d, std::int64_t now, s::SafetyKind kind, s::Severity sev,
              const nav::FrameDecision* nav_now, std::vector<s::SafetyAlertEvent>& out) {
     if (!d) {
       w.streak = 0;
-      return;
+      return false;
     }
-    if (++w.streak < confirm_) return;  // one frame is a blip, never a warning
-    if (w.last_alert_ms >= 0 && now - w.last_alert_ms < safety_.repeat_suppress_s * 1000) return;
+    if (++w.streak < confirm_) return false;  // one frame is a blip, never a warning
+    if (w.last_alert_ms >= 0 && now - w.last_alert_ms < safety_.repeat_suppress_s * 1000) return false;
     w.last_alert_ms = now;
     s::SafetyAlertEvent a;
     a.kind = kind;
@@ -78,6 +83,7 @@ class VisionSafetyMonitor final : public SafetyMonitor {
     a.confidence = d->score;
     a.text = nav::warning_text(d->thing, nav_now);
     out.push_back(std::move(a));
+    return true;
   }
 
   config::SafetyThresholds safety_;

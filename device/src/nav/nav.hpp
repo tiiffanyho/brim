@@ -36,6 +36,7 @@ struct FrameDecision {
   schema::Direction direction = schema::Direction::Unknown;  // only for Go
   std::vector<schema::Direction> blocked;
   detect::Thing because = detect::Thing::Unknown;  // the biggest blocking thing, for the spoken text
+  int because_track = -1;                          // its track id (to name an enrolled person), -1 = none
   bool same_call(const FrameDecision& o) const { return kind == o.kind && direction == o.direction; }
 };
 

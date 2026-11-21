@@ -45,6 +45,7 @@
 #include "common/sysinfo.hpp"
 #include "common/timing.hpp"
 #include "detect/detector.hpp"
+#include "detect/faces.hpp"
 #include "ipc/bus.hpp"
 #include "nav/nav.hpp"
 #include "safety/safety_monitor.hpp"
@@ -81,6 +82,8 @@ struct Ctx {
   events::EventStamper stamper{"brim"};
   ipc::EventBus* bus = nullptr;
   audio::SpeakQueue* speak = nullptr;
+  config::FaceConfig faces;
+  faces::Recogniser* recog = nullptr;  // names enrolled people only; never null after startup
   Stats stats;
   std::atomic<bool> detect_healthy{true};  // written by the pipeline, read by the health thread
 
@@ -289,6 +292,8 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
   std::int64_t stats_window_start = timing::mono_ms();
   std::int64_t last_dets_log_ms = 0;
   std::vector<detect::Detection> dets;  // reused every frame: no per-frame allocation
+  std::vector<int> subjects;            // which track each safety alert is about
+  subjects.reserve(4);
   dets.reserve(32);
   capture::Frame frame;
   std::int64_t start = timing::mono_ms();
@@ -395,15 +400,27 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
 
     // 1. Safety first: anything close in front ("Person ahead, move left" with the side from the
     //    confirmed call above, or "Person ahead, stop" / "Path unclear, stop" while unsure).
-    for (auto& alert : safety_mon.check(frame, dets, navigator.current())) {
+    //    An enrolled person already recognised on this track is named in `name` (never in `text`,
+    //    which is what gets stored). Only a name that is already known: this never waits.
+    auto alerts = safety_mon.check(frame, dets, navigator.current(), &subjects);
+    for (std::size_t i = 0; i < alerts.size(); ++i) {
+      auto& alert = alerts[i];
       alert.t_capture_mono_ms = frame.t_capture_mono_ms;
-      c.cue(audio::Priority::Safety, alert, alert.text, frame.t_capture_mono_ms);
+      if (alert.kind == s::SafetyKind::PersonClose && i < subjects.size()) {
+        std::string name = c.recog->name_for(subjects[i], now);
+        if (!name.empty()) alert.name = std::move(name);
+      }
+      c.cue(audio::Priority::Safety, alert, alert.text, frame.t_capture_mono_ms);  // logs stay anonymous
     }
 
     // 2. Navigation: the safest direction to move, or stop. The phone does not repeat it when it
     //    is word for word the warning it just read.
     if (path) {
       path->t_capture_mono_ms = frame.t_capture_mono_ms;
+      if (const auto* cur = navigator.current(); cur && cur->because == detect::Thing::Person) {
+        std::string name = c.recog->name_for(cur->because_track, now);
+        if (!name.empty()) path->name = std::move(name);
+      }
       const std::string text = path->text;
       c.cue(audio::Priority::Nav, *path, text, frame.t_capture_mono_ms);
       BRIM_LOGI("nav", "%s", text.c_str());
@@ -442,6 +459,10 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
         c.cue(audio::Priority::Info, e, std::string(s::to_string(*kind)) + " " + s::to_string(dir), frame.t_capture_mono_ms);
       }
     }
+    // 4. Faces, last and off the frame path: offer person boxes to the recogniser thread, which
+    //    takes one only when it is idle and somebody is enrolled. Nothing waits for it.
+    for (const auto& d : dets)
+      if (d.is_person() && d.score >= c.safety.min_confidence) c.recog->offer(frame, d, now);
     tracks.expire(now);
     c.stats.tracks = static_cast<std::int64_t>(tracks.active(now));
   }
@@ -499,6 +520,8 @@ void health_loop(Ctx& c, const char* camera_name, const char* detector_name) {
              std::string(detector_name) + ", " + std::to_string(c.stats.tracks.load()) + " tracks"),
         comp("safety", s::ComponentState::Stub),
         comp("speech", s::ComponentState::Ok, "spoken by the phone app"),
+        comp("faces", c.recog->status().rfind("unavailable", 0) == 0 ? s::ComponentState::Stub : s::ComponentState::Ok,
+             c.recog->status()),
         comp("ipc", s::ComponentState::Ok, std::string(ipc::backend_name()) + ", dropped " + std::to_string(c.bus->dropped())),
     };
     c.emit(h, 0);
@@ -581,6 +604,7 @@ int main(int argc, char** argv) {
   c.safety = config::load_safety(config::config_dir() + "/safety.json");
   c.nav = config::load_nav(config::config_dir() + "/nav.json");
   c.detect = config::load_detect(config::config_dir() + "/detect.json");
+  c.faces = config::load_faces(config::config_dir() + "/faces.json");
 
   ipc::EventBus bus(events::kAppServerChannel);
   ipc::EventBus supervisor_bus(events::kSupervisorChannel, 4);
@@ -620,6 +644,12 @@ int main(int argc, char** argv) {
 
   // TODO(qnx-check): pin the pipeline thread to its own core and raise its priority
   //   (pthread_setschedparam SCHED_RR; ThreadCtl(_NTO_TCTL_RUNMASK) for affinity on QNX).
+  // Names enrolled people only (config/faces.json, data/faces). Idle while nobody is enrolled.
+  faces::Recogniser recog(c.faces, faces::make_face_embedder(c.faces, c.app.models_dir));
+  recog.start();
+  c.recog = &recog;
+  BRIM_LOGI("brim", "faces: %s", recog.status().c_str());
+
   std::thread t_pipe(pipeline_loop, std::ref(c), std::ref(*cam), std::ref(*det), std::ref(*safety_mon), hang_after_ms);
   std::thread t_cues(cue_loop, std::ref(c));
   std::thread t_health(health_loop, std::ref(c), cam->name(), det->name());
@@ -633,5 +663,6 @@ int main(int argc, char** argv) {
   t_health.join();
   t_hb.join();
   t_cmd.join();
+  recog.stop();
   return 0;
 }

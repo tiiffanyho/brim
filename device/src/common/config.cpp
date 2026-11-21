@@ -95,6 +95,37 @@ DetectConfig load_detect(const std::string& path) {
   return c;
 }
 
+FaceConfig load_faces(const std::string& path) {
+  FaceConfig c;
+  std::string err;
+  auto j = json::parse_file(path, &err);
+  if (!j || !j->is_object()) {
+    BRIM_LOGW("config", "using default face config (%s)", err.c_str());
+    return c;
+  }
+  const FaceConfig def;
+  c.faces_dir = j->get_string("faces_dir", c.faces_dir);
+  c.detector_model = j->get_string("detector_model", c.detector_model);
+  c.embedder_model = j->get_string("embedder_model", c.embedder_model);
+  c.embedder_id = j->get_string("embedder_id", c.embedder_id);
+  c.match_threshold = j->get_number("match_threshold", c.match_threshold);
+  c.min_margin = j->get_number("min_margin", c.min_margin);
+  c.face_min_score = j->get_number("face_min_score", c.face_min_score);
+  c.min_face_px = static_cast<int>(j->get_int("min_face_px", c.min_face_px));
+  c.check_interval_ms = j->get_int("check_interval_ms", c.check_interval_ms);
+  c.name_ttl_ms = j->get_int("name_ttl_ms", c.name_ttl_ms);
+  c.gallery_reload_ms = j->get_int("gallery_reload_ms", c.gallery_reload_ms);
+  // Floors: never name on a weak match, never keep a name long, never hammer the CPU.
+  if (c.match_threshold < 0.3 || c.match_threshold > 1.0) c.match_threshold = def.match_threshold;
+  if (c.min_margin < 0 || c.min_margin > 0.5) c.min_margin = def.min_margin;
+  if (c.face_min_score < 0.5 || c.face_min_score > 1.0) c.face_min_score = def.face_min_score;
+  if (c.min_face_px < 20) c.min_face_px = 20;
+  if (c.check_interval_ms < 500) c.check_interval_ms = 500;
+  if (c.name_ttl_ms <= 0 || c.name_ttl_ms > 10000) c.name_ttl_ms = def.name_ttl_ms;
+  if (c.gallery_reload_ms < 1000) c.gallery_reload_ms = 1000;
+  return c;
+}
+
 schema::Settings default_settings() {
   schema::Settings s;
   s.volume = 80;

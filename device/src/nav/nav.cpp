@@ -82,6 +82,7 @@ FrameDecision decide_frame(const std::vector<Detection>& dets, const config::Nav
   if (ahead_blocked) {
     out.blocked.push_back(s::Direction::Ahead);
     out.because = biggest(in_corridor)->thing;
+    out.because_track = biggest(in_corridor)->track_id;
     if (!left_clear && !right_clear) {
       out.kind = FrameDecision::Kind::Stop;
       out.blocked = {s::Direction::Left, s::Direction::Ahead, s::Direction::Right};
@@ -107,12 +108,14 @@ FrameDecision decide_frame(const std::vector<Detection>& dets, const config::Nav
     out.direction = s::Direction::Ahead;
     out.blocked = {s::Direction::Left, s::Direction::Right};
     out.because = biggest(blockers)->thing;
+    out.because_track = biggest(blockers)->track_id;
     return out;
   }
   // Something close on one side: move away from it, towards the side we know is clear.
   out.direction = left_clear ? s::Direction::Left : s::Direction::Right;
   out.blocked.push_back(left_clear ? s::Direction::Right : s::Direction::Left);
   out.because = biggest(left_clear ? in_right : in_left)->thing;
+  out.because_track = biggest(left_clear ? in_right : in_left)->track_id;
   return out;
 }
 

@@ -61,6 +61,7 @@ add_library(brim_pipeline STATIC
   src/capture/camera.cpp
   src/detect/detector.cpp
   src/detect/tflite_detector.cpp
+  src/detect/faces.cpp
   src/safety/safety_monitor.cpp
   src/nav/nav.cpp
   src/audio/speak_queue.cpp
@@ -81,6 +82,24 @@ if(BRIM_WITH_TFLITE)
     # Not fatal, so the rest of the device still builds; brim then reports detection as a spoken fault.
     message(WARNING "BRIM_WITH_TFLITE=ON but tensorflow/lite/c/c_api.h or the TFLite library was not found "
                     "(set BRIM_QNX_DEPS_PREFIX). Building without detection.")
+  endif()
+endif()
+
+# Face recognition of enrolled people (src/detect/faces.cpp): OpenCV 4.12 from oss.qnx.com,
+# FaceDetectorYN + FaceRecognizerSF. Without it brim builds and runs, and nobody is ever named.
+option(BRIM_WITH_OPENCV "Link OpenCV for face recognition of enrolled people" ${BRIM_IS_QNX})
+if(BRIM_WITH_OPENCV)
+  # TODO(qnx-check): confirm the OpenCV 4.12 package from oss.qnx.com ships objdetect + dnn and an
+  #   OpenCVConfig.cmake (else point OpenCV_DIR at it under BRIM_QNX_DEPS_PREFIX).
+  find_package(OpenCV 4.5.4 QUIET COMPONENTS core imgproc objdetect dnn)
+  if(OpenCV_FOUND)
+    target_include_directories(brim_pipeline PRIVATE ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(brim_pipeline PUBLIC ${OpenCV_LIBS})
+    target_compile_definitions(brim_pipeline PRIVATE BRIM_WITH_OPENCV=1)
+    message(STATUS "OpenCV ${OpenCV_VERSION}: face recognition available")
+  else()
+    message(WARNING "BRIM_WITH_OPENCV=ON but OpenCV (core imgproc objdetect dnn) was not found. "
+                    "Building without face recognition: nobody will be named.")
   endif()
 endif()
 
@@ -155,6 +174,7 @@ if(BRIM_BUILD_TESTS)
   brim_test(test_detect brim_pipeline)
   brim_test(test_nav brim_pipeline)
   brim_test(test_safety brim_pipeline)
+  brim_test(test_faces brim_pipeline)
   if(BRIM_BUILD_APP_SERVER)
     brim_test(test_db brim_db)
     brim_test(test_api brim_api)
