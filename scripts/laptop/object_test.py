@@ -124,6 +124,67 @@ def spoken(thing: str, kinds: dict[str, str | None]) -> str:
     return '"Something"' if k == "Obstacle" else f'"{k}"'
 
 
+class BrimClasses:
+    """Everything the tests need to score like the hat: mapping, thresholds, names, obstacle classes."""
+
+    def __init__(self, cfg: dict) -> None:
+        self.model_path = rel(cfg["model"])
+        with open(rel(cfg["mapping_source"])) as f:
+            self.det_src = f.read()
+        with open(rel(cfg["nav_source"])) as f:
+            self.nav_src = f.read()
+        header = os.path.splitext(rel(cfg["mapping_source"]))[0] + ".hpp"  # enum class Thing lives here
+        hdr_src = open(header).read() if os.path.exists(header) else ""
+        with open(rel(cfg["safety_config"])) as f:
+            safety = json.load(f)
+        min_conf = float(safety.get("min_confidence", 0.60))
+        phone_conf = float(safety.get("phone_min_confidence", 0.55))
+        self.mapping = read_mapping(self.det_src)
+        self.kinds = read_obstacle_kinds(self.det_src)
+        self.labels = model_labels(self.model_path)
+        lab = self.labels
+        self.name_of = {c: ALIASES.get(lab[c], lab[c]) if c < len(lab) else f"class {c}" for c in self.mapping}
+        self.cls_of = {n: c for c, n in self.name_of.items()}
+        self.thr = {c: phone_conf if self.mapping[c] == "Phone" else min_conf for c in self.mapping}
+        self.obstacle_classes = {c for c in self.mapping if self.kinds.get(self.mapping[c]) is not None}
+        self.phone_classes = [c for c in self.mapping if self.mapping[c] == "Phone"]
+        self.mapping_phone_ok = (bool(self.phone_classes) and self.kinds.get("Phone", "missing") is None
+                                 and nav_ignores_phones(self.nav_src, self.det_src))
+        self.notes = []
+        for c in self.mapping:
+            if c >= len(lab) or lab[c] in ("???", ""):
+                self.notes.append(f"COCO {c} is a gap in the model's labelmap but is mapped to {self.mapping[c]}")
+        unreachable = [t for t in all_things(hdr_src + self.det_src) if t not in set(self.mapping.values()) and t != "Unknown"]
+        if unreachable:
+            self.notes.append(f"Thing::{', Thing::'.join(unreachable)} have no COCO class: the detector can never report "
+                              "them (only fake mode does). Not changed; reported for the team.")
+        if not lab:
+            self.notes.append("the model has no labelmap.txt inside; class names could not be checked")
+
+    def print_mapping(self, source: str) -> None:
+        print(f"Brim's COCO-to-Thing mapping ({source}), checked against the model's labelmap.txt:")
+        print(f"  {'COCO':>4}  {'model label':<14} {'Brim Thing':<10} {'threshold':>9}  said as")
+        for c in sorted(self.mapping):
+            lab = self.labels[c] if c < len(self.labels) else "?"
+            print(f"  {c:>4}  {lab:<14} {self.mapping[c]:<10} {self.thr[c]:>9.2f}  {spoken(self.mapping[c], self.kinds)}")
+        for n in self.notes:
+            print(f"  note: {n}")
+
+    def best_scores(self, dets) -> dict[int, float]:
+        best = {}
+        for d in dets:
+            if d.class_id in self.mapping and d.score > best.get(d.class_id, -1):
+                best[d.class_id] = d.score
+        return best
+
+    def phone_obstacle_hits(self, dets) -> tuple[int, list]:
+        """(phones seen, [(obstacle class, score)] boxes sitting on a phone): a phone is never an obstacle."""
+        phones = [d for d in dets if d.class_id in self.phone_classes and d.score >= self.thr[d.class_id]]
+        hits = [(self.name_of[d.class_id], d.score) for p in phones for d in dets
+                if d.class_id in self.obstacle_classes and d.score >= self.thr[d.class_id] and iou(p, d) >= PHONE_OVERLAP_IOU]
+        return len(phones), hits
+
+
 # ------------------------------------------------------------------ the photo test
 def iou(a, b) -> float:
     x1, y1 = max(a.x, b.x), max(a.y, b.y)
@@ -164,43 +225,11 @@ def main() -> int:
     with open(a.config) as f:
         cfg = json.load(f)
     data_dir = a.data_dir or rel(cfg["data_dir"])
-    model_path = rel(cfg["model"])
-    with open(rel(cfg["mapping_source"])) as f:
-        det_src = f.read()
-    with open(rel(cfg["nav_source"])) as f:
-        nav_src = f.read()
-    header = os.path.splitext(rel(cfg["mapping_source"]))[0] + ".hpp"  # enum class Thing lives here
-    hdr_src = open(header).read() if os.path.exists(header) else ""
-    with open(rel(cfg["safety_config"])) as f:
-        safety = json.load(f)
-    min_conf = float(safety.get("min_confidence", 0.60))
-    phone_conf = float(safety.get("phone_min_confidence", 0.55))
-
-    mapping = read_mapping(det_src)
-    kinds = read_obstacle_kinds(det_src)
-    labels = model_labels(model_path)
-    name_of = {c: ALIASES.get(labels[c], labels[c]) if c < len(labels) else f"class {c}" for c in mapping}
-    cls_of = {n: c for c, n in name_of.items()}
-    thr = {c: phone_conf if mapping[c] == "Phone" else min_conf for c in mapping}
-    obstacle_classes = {c for c in mapping if kinds.get(mapping[c]) is not None}
+    bc = BrimClasses(cfg)
+    model_path, mapping, name_of, cls_of, thr = bc.model_path, bc.mapping, bc.name_of, bc.cls_of, bc.thr
 
     # 1. The mapping, as the hat has it.
-    print(f"Brim's COCO-to-Thing mapping ({cfg['mapping_source']}), checked against the model's labelmap.txt:")
-    print(f"  {'COCO':>4}  {'model label':<14} {'Brim Thing':<10} {'threshold':>9}  said as")
-    for c in sorted(mapping):
-        print(f"  {c:>4}  {labels[c] if c < len(labels) else '?':<14} {mapping[c]:<10} {thr[c]:>9.2f}  {spoken(mapping[c], kinds)}")
-    notes = []
-    for c in mapping:
-        if c >= len(labels) or labels[c] in ("???", ""):
-            notes.append(f"COCO {c} is a gap in the model's labelmap but is mapped to {mapping[c]}")
-    unreachable = [t for t in all_things(hdr_src + det_src) if t not in set(mapping.values()) and t != "Unknown"]
-    if unreachable:
-        notes.append(f"Thing::{', Thing::'.join(unreachable)} have no COCO class: the detector can never report them "
-                     "(only fake mode does). Not changed; reported for the team.")
-    if not labels:
-        notes.append("the model has no labelmap.txt inside; class names could not be checked")
-    for n in notes:
-        print(f"  note: {n}")
+    bc.print_mapping(cfg["mapping_source"])
     print()
 
     rows = read_labels(os.path.join(data_dir, cfg.get("labels_file", "labels.csv")), set(cls_of))
@@ -224,10 +253,7 @@ def main() -> int:
         t0 = time.perf_counter()
         dets = detect(model, rgb)
         ms = (time.perf_counter() - t0) * 1000.0
-        best = {}  # COCO class -> best score, mapped classes only
-        for d in dets:
-            if d.class_id in mapping and d.score > best.get(d.class_id, -1):
-                best[d.class_id] = d.score
+        best = bc.best_scores(dets)  # COCO class -> best score, mapped classes only
         reported = {c for c, s in best.items() if s >= thr[c]}
         if label == "none":
             detected = bool(reported)
@@ -241,12 +267,9 @@ def main() -> int:
             correct = detected
             seen = sorted(name_of[x] for x in reported if x != c)
         # A phone is never an obstacle: no obstacle-class box may sit on a phone box.
-        phones = [d for d in dets if d.class_id in mapping and mapping[d.class_id] == "Phone" and d.score >= thr[d.class_id]]
-        phones_checked += len(phones)
-        for p in phones:
-            for d in dets:
-                if d.class_id in obstacle_classes and d.score >= thr[d.class_id] and iou(p, d) >= PHONE_OVERLAP_IOU:
-                    phone_as_obstacle.append((photo, name_of[d.class_id], d.score))
+        n_phones, hits = bc.phone_obstacle_hits(dets)
+        phones_checked += n_phones
+        phone_as_obstacle += [(photo, what, sc) for what, sc in hits]
         results.append({"photo": photo, "label": label, "detected": detected, "correct": correct, "ms": ms,
                         "reported": reported, "best": best})
         s = f"{score:.2f}" if score is not None else "-"
@@ -289,8 +312,8 @@ def main() -> int:
           f"{none_ok}/{n_none} 'none' photos with nothing reported")
 
     # 4. Cell phone is never an obstacle.
-    phone_cls = [c for c in mapping if mapping[c] == "Phone"]
-    mapping_ok = bool(phone_cls) and kinds.get("Phone", "missing") is None and nav_ignores_phones(nav_src, det_src)
+    phone_cls = bc.phone_classes
+    mapping_ok = bc.mapping_phone_ok
     phone_ok = mapping_ok and not phone_as_obstacle
     all_ok &= phone_ok
     print()
