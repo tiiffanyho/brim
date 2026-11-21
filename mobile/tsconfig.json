@@ -1,0 +1,12 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "paths": {
+      "@schema": ["../shared/gen/events.ts"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", "../shared/gen/events.ts"]
+}
