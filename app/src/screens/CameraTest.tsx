@@ -3,8 +3,10 @@
 // Nothing is recorded: frames are drawn and dropped; tracks are forgotten after 1.5 s.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ObjectDetector } from "@mediapipe/tasks-vision";
-import safetyJson from "../../../config/safety.json";
+import QRCode from "qrcode";
 import { detect, loadDetector, type Seen } from "../vision/detector";
+import { Guide, inCorridor, proximityOf as proximity } from "../vision/guide";
+import { openLink, type Link } from "../vision/link";
 import { MIN_CONFIDENCE, NAV, Navigator, type Direction } from "../vision/nav";
 import { focalFromVfov, Tracker, type Track } from "../vision/tracker";
 
@@ -25,17 +27,6 @@ function savedFocal(): number {
   }
 }
 
-/** Same close/near/far rule as the hat (config/safety.json, box area fractions). */
-function proximity(t: Track): "close" | "near" | "far" {
-  const a = t.box.w * t.box.h;
-  const close = t.thing === "person" ? safetyJson.person_close_area_frac : safetyJson.object_close_area_frac;
-  return a >= close ? "close" : a >= safetyJson.near_area_frac ? "near" : "far";
-}
-function inCorridor(t: Track): boolean {
-  const m = NAV.side_margin_frac;
-  return t.box.y + t.box.h > 0.5 && t.box.x < 1 - m && t.box.x + t.box.w > m;
-}
-
 export function CameraTestScreen() {
   const h1 = useRef<HTMLHeadingElement>(null);
   const video = useRef<HTMLVideoElement>(null);
@@ -43,6 +34,9 @@ export function CameraTestScreen() {
   const detector = useRef<ObjectDetector | null>(null);
   const tracker = useRef(new Tracker(savedFocal()));
   const nav = useRef(new Navigator());
+  const guide = useRef(new Guide());
+  const link = useRef<Link | null>(null);
+  const phonesRef = useRef(0);
   const raf = useRef(0);
   const lastSpoken = useRef<{ text: string; at: number }>({ text: "", at: 0 });
 
@@ -55,10 +49,31 @@ export function CameraTestScreen() {
   const [stats, setStats] = useState({ fps: 0, ms: 0 });
   const [calDist, setCalDist] = useState(2);
   const [calMsg, setCalMsg] = useState("");
+  const [phones, setPhones] = useState(0);
+  const [phoneUrls, setPhoneUrls] = useState<string[]>([]);
+  const [qr, setQr] = useState("");
 
   useEffect(() => {
     document.title = "Camera test – Brim";
     h1.current?.focus();
+    link.current = openLink(
+      "camera",
+      (m) => {
+        if (m.type === "peers") {
+          phonesRef.current = m.phones;
+          setPhones(m.phones);
+        }
+      },
+      () => {},
+    );
+    fetch("/camlink-info")
+      .then((r) => r.json() as Promise<{ urls: string[] }>)
+      .then(({ urls }) => {
+        setPhoneUrls(urls);
+        if (urls[0]) QRCode.toDataURL(urls[0], { margin: 1, width: 200 }).then(setQr, () => {});
+      })
+      .catch(() => {});
+    return () => link.current?.close();
   }, []);
 
   const say = useCallback(
@@ -68,7 +83,8 @@ export function CameraTestScreen() {
       if (lastSpoken.current.text === text && now - lastSpoken.current.at < 4000) return;
       lastSpoken.current = { text, at: now };
       setSaid({ text, kind });
-      if (!speak || !("speechSynthesis" in window)) return;
+      // With a phone connected, the phone speaks; the laptop stays quiet.
+      if (!speak || phonesRef.current > 0 || !("speechSynthesis" in window)) return;
       if (kind === "alert") window.speechSynthesis.cancel(); // safety interrupts
       window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
     },
@@ -114,13 +130,12 @@ export function CameraTestScreen() {
       const forNav = seen.filter((s) => s.brim && s.score >= MIN_CONFIDENCE);
       const call = nav.current.update(forNav, now);
 
-      // Safety first: something close in the corridor, or something coming at you fast.
-      const brimTracks = live.filter((t) => seenIsBrim(t) && t.score >= MIN_CONFIDENCE);
-      const close = brimTracks.find((t) => t.thing !== "phone" && inCorridor(t) && proximity(t) === "close");
-      const coming = live.find((t) => t.approaching && t.score >= MIN_CONFIDENCE);
-      if (close) say(`${cap(close.thing === "unknown" ? "something" : close.label)} close ahead`, "alert");
-      else if (coming) say(`${cap(coming.label)} approaching`, "alert");
-      if (call) say(call.text, "nav");
+      // Word it for walking (safety first), send it to the phone, and show / say it here.
+      for (const e of guide.current.update({ now, call, frame: nav.current.lastFrame, tracks: live, minConfidence: MIN_CONFIDENCE })) {
+        link.current?.send(e);
+        if (e.type === "safety_alert") say(e.text, "alert");
+        else if (e.type === "clear_path") say(e.text, "nav");
+      }
 
       draw(c, v, live, nav.current.lastFrame.blocked, nav.current.lastFrame.kind);
       frames++;
@@ -149,6 +164,7 @@ export function CameraTestScreen() {
       await v.play();
       tracker.current.reset();
       nav.current.reset();
+      guide.current.reset();
       setStatus("running");
       loop();
     } catch (e) {
@@ -224,7 +240,21 @@ export function CameraTestScreen() {
         )}
         <div className="check">
           <input id="cam-speak" type="checkbox" checked={speak} onChange={(e) => setSpeak(e.target.checked)} />
-          <label htmlFor="cam-speak">Speak out loud</label>
+          <label htmlFor="cam-speak">Speak on this laptop when no phone is connected</label>
+        </div>
+      </div>
+
+      <h2>Phone</h2>
+      <div className="card phone-panel">
+        {qr && <img src={qr} alt="" width={120} height={120} />}
+        <div>
+          <p className="strong">
+            {phones > 0 ? `${phones} phone${phones > 1 ? "s" : ""} connected. The phone speaks; the laptop stays quiet.` : "No phone connected yet."}
+          </p>
+          <p className="muted">
+            On your phone (same Wi-Fi), scan the code or open{" "}
+            {phoneUrls.length ? phoneUrls.map((u) => <code key={u}>{u} </code>) : "this laptop's address on port 5173 /#/phone"}
+          </p>
         </div>
       </div>
 
@@ -274,7 +304,6 @@ export function CameraTestScreen() {
 
 const BRIM_LABELS = new Set(["person", "bicycle", "vehicle", "chair", "table", "phone", "bench", "backpack", "suitcase", "couch"]);
 const seenIsBrim = (t: Track) => BRIM_LABELS.has(t.label);
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** Security-camera overlay: corridor, left/ahead/right bands, corner brackets and tags. */
 export function draw(c: HTMLCanvasElement, v: HTMLVideoElement, tracks: Track[], blocked: Direction[], kind: string) {

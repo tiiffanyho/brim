@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BrimEvent, ClearPathEvent, Direction, FaultEvent, ObstacleSeenEvent, PersonSeenEvent, SafetyAlertEvent } from "@schema";
 import { describeEvent, directionWords, obstacleWords, proximityWords } from "../a11y/describe";
-import { useBrim, useLiveEvents } from "../state";
+import { useBrim } from "../state";
 
 type Tone = "calm" | "warn" | "alert" | "safe";
 interface Said {
@@ -46,7 +46,25 @@ function spokenText(e: BrimEvent): string | null {
 }
 
 export function LiveScreen() {
-  const { stream, faults } = useBrim();
+  const { stream, faults, subscribe } = useBrim();
+  return <LiveView subscribe={subscribe} live={stream === "open"} faults={faults} />;
+}
+
+/**
+ * The screen itself, fed by any event source: the hat (via useBrim) or, in dev, the laptop
+ * camera link (screens/PhoneLink.tsx). Same events, same look.
+ */
+export function LiveView({
+  subscribe,
+  live,
+  faults,
+  liveLabel = "Live",
+}: {
+  subscribe: (fn: (e: BrimEvent) => void) => () => void;
+  live: boolean;
+  faults: FaultEvent[];
+  liveLabel?: string;
+}) {
   const h1 = useRef<HTMLHeadingElement>(null);
   const [said, setSaid] = useState<Said | null>(null);
   const [alert, setAlert] = useState<{ e: SafetyAlertEvent; at: number } | null>(null);
@@ -58,15 +76,19 @@ export function LiveScreen() {
   useEffect(() => {
     document.title = "Live – Brim";
     h1.current?.focus();
-    const t = setInterval(() => setNow(Date.now()), 1000);
+    const t = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(t);
   }, []);
 
-  useLiveEvents((e) => {
+  const onEvent = useRef<(e: BrimEvent) => void>(() => {});
+  useEffect(() => subscribe((e) => onEvent.current(e)), [subscribe]);
+  onEvent.current = (e) => {
     const at = Date.now();
     if (e.type === "health") return;
     if (e.type === "safety_alert") setAlert({ e, at });
     if (e.type === "clear_path") setPath({ e, at });
+    // An all-clear ends the warning on screen.
+    if (e.type === "clear_path" && e.clear && e.direction === "ahead" && !(e.blocked ?? []).length) setAlert(null);
     if (e.type === "obstacle_seen") setObstacle({ e, at });
     if (e.type === "person_seen")
       setPeople((m) => {
@@ -76,7 +98,7 @@ export function LiveScreen() {
       });
     const text = spokenText(e);
     if (text) setSaid({ text, tone: toneOf(e), at, type: e.type });
-  });
+  };
 
   const fresh = (at: number) => now - at < LIVE_TTL_MS;
   const activeFault: FaultEvent | undefined = faults[0]?.action === "degraded" ? faults[0] : undefined;
@@ -90,7 +112,7 @@ export function LiveScreen() {
   const quote = activeFault
     ? activeFault.message
     : guiding
-      ? `${liveAlert.e.text}. ${said.text}.`
+      ? `${trimStop(liveAlert.e.text)}. ${trimStop(said.text)}.`
       : (said?.text ?? "Listening. Checking the path ahead.");
   const status = activeFault
     ? "Hat problem"
@@ -121,7 +143,7 @@ export function LiveScreen() {
       <p className="live-status">
         <span className="dot" aria-hidden="true" />
         <span>{status}</span>
-        <span className="live-conn">{stream === "open" ? "Live" : "Reconnecting…"}</span>
+        <span className="live-conn">{live ? liveLabel : "Reconnecting…"}</span>
       </p>
 
       <div className="says">
@@ -190,6 +212,8 @@ export function LiveScreen() {
     </section>
   );
 }
+
+const trimStop = (s: string) => s.replace(/[.\s]+$/, "");
 
 function ago(ms: number): string {
   const s = Math.round(ms / 1000);

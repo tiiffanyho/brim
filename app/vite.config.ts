@@ -4,7 +4,59 @@ import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { join, normalize } from "node:path";
+import { networkInterfaces } from "node:os";
 import type { Plugin } from "vite";
+import { WebSocketServer, WebSocket } from "ws";
+
+/** This laptop's Wi-Fi addresses, so the camera page can show the phone a link. */
+function lanAddresses(): string[] {
+  return Object.values(networkInterfaces())
+    .flat()
+    .filter((a) => a && a.family === "IPv4" && !a.internal)
+    .map((a) => a!.address);
+}
+
+// Dev only: links the laptop camera page (#/camera) to phones (#/phone) on the same Wi-Fi.
+// Whatever the camera sends goes straight to every phone; the camera hears how many phones are on.
+function cameraLink(): Plugin {
+  return {
+    name: "brim-camera-link",
+    apply: "serve",
+    configureServer(server) {
+      const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+      const cameras = new Set<WebSocket>();
+      const phones = new Set<WebSocket>();
+      const tellCameras = () => {
+        const msg = JSON.stringify({ type: "peers", phones: phones.size });
+        for (const c of cameras) if (c.readyState === WebSocket.OPEN) c.send(msg);
+      };
+      server.httpServer?.on("upgrade", (req, socket, head) => {
+        const url = new URL(req.url ?? "/", "http://x");
+        if (url.pathname !== "/camlink") return; // Vite HMR and the /ws proxy handle the rest
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          const role = url.searchParams.get("role") === "camera" ? "camera" : "phone";
+          const set = role === "camera" ? cameras : phones;
+          set.add(ws);
+          tellCameras();
+          ws.on("message", (data) => {
+            if (role !== "camera") return;
+            const text = data.toString();
+            for (const p of phones) if (p.readyState === WebSocket.OPEN) p.send(text);
+          });
+          ws.on("close", () => {
+            set.delete(ws);
+            tellCameras();
+          });
+        });
+      });
+      server.middlewares.use("/camlink-info", (_req, res) => {
+        const port = server.config.server.port ?? 5173;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ urls: lanAddresses().map((ip) => `http://${ip}:${port}/#/phone`) }));
+      });
+    },
+  };
+}
 
 // Dev only: the laptop camera test (#/camera) loads MediaPipe's WASM from node_modules and the
 // detector model from models/ on this machine, so nothing is fetched from a CDN. Not in the build.
@@ -43,7 +95,7 @@ function cameraTestFiles(): Plugin {
 const appServer = process.env.BRIM_APP_SERVER ?? "http://127.0.0.1:8080";
 
 export default defineConfig({
-  plugins: [react(), cameraTestFiles()],
+  plugins: [react(), cameraTestFiles(), cameraLink()],
   resolve: {
     alias: { "@schema": fileURLToPath(new URL("../shared/gen/events.ts", import.meta.url)) },
   },

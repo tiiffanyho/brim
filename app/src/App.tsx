@@ -19,6 +19,11 @@ function CameraTest() {
   ) : null;
 }
 
+// Phone side of the laptop camera demo (#/phone), also dev only: a full-screen Live view.
+const PhoneLinkLazy = import.meta.env.DEV
+  ? lazy(() => import("./screens/PhoneLink").then((m) => ({ default: m.PhoneLinkScreen })))
+  : null;
+
 const ROUTES = [
   { path: "live", label: "Live", Component: LiveScreen },
   { path: "activity", label: "Activity", Component: ActivityScreen },
@@ -56,6 +61,14 @@ export function App() {
         : "";
 
   const Active = ROUTES.find((r) => r.path === route)!.Component;
+
+  if (PhoneLinkLazy && window.location.hash.replace(/^#\/?/, "") === "phone") {
+    return (
+      <Suspense fallback={<p role="status">Loading…</p>}>
+        <PhoneLinkLazy />
+      </Suspense>
+    );
+  }
 
   return (
     <div className="app">

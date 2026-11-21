@@ -165,3 +165,9 @@ main:has(.camera-test) { max-width: 46rem; }
 .says-card .quote { font-size: 1.4rem; }
 .says-card.is-alert { background: var(--danger-bg); }
 .says-card.is-alert .quote { color: var(--danger); }
+.phone-link main { padding-bottom: 1.5rem; }
+.phone-link .live { min-height: calc(100vh - 2.5rem); }
+.voice-gate { position: fixed; inset: auto 0 0 0; padding: 1.25rem 1.25rem calc(1.25rem + env(safe-area-inset-bottom)); background: rgba(250, 248, 255, 0.92); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); display: flex; flex-direction: column; gap: 0.5rem; text-align: center; z-index: 10; }
+.phone-panel { flex-direction: row; align-items: center; gap: 1rem; }
+.phone-panel img { border-radius: 0.6rem; background: #fff; flex: none; }
+.phone-panel code { word-break: break-all; font-size: 0.8rem; }
