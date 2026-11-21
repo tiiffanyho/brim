@@ -19,6 +19,9 @@ The words come from brim itself: each frame's boxes go to device/build/host/deci
 `cd device && cmake --build --preset host`), which runs brim's own close warning and navigation code
 ("Person ahead, move left", "Chair ahead, move right", "Person ahead, stop", "Path unclear, stop").
 --say speaks them on the Mac (on the hat the phone speaks; the Pi plays no sound).
+If somebody is enrolled (scripts/faces/enrol.py), the face in each person box is checked and a
+warning about an enrolled person is said with their name ("Tiffany ahead, move left"), matched by
+brim's own C++ (decide_probe). Nobody enrolled: no face model runs. Nothing is saved.
 
 As a library (scripts/test_traffic.py):  model = load_model();  dets = detect(model, load_image(p))
 detect() returns RAW model rows (COCO-90 class index, score, box): no Brim class mapping and no
@@ -176,12 +179,14 @@ class Decider:
         self.proc = subprocess.Popen([probe], cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, text=True, bufsize=1)
 
-    def says(self, t_ms: int, dets: list[Detection]) -> list[tuple[str, str]]:
+    def says(self, t_ms: int, dets: list[Detection], faces: dict | None = None) -> list[tuple[str, str, bool]]:
+        """(prio, spoken words, named?) for this frame. `faces`: {row index: embedding}."""
         rows = " ".join(f"{d.y:.6f} {d.x:.6f} {d.y + d.h:.6f} {d.x + d.w:.6f} {d.class_id} {d.score:.6f}" for d in dets)
-        self.proc.stdin.write(f"{t_ms} {len(dets)} {rows}\n")
+        embs = " ".join(f"{i} {len(e)} " + " ".join(f"{x:.6f}" for x in e) for i, e in (faces or {}).items())
+        self.proc.stdin.write(f"{t_ms} {len(dets)} {rows} {len(faces or {})} {embs}\n")
         self.proc.stdin.flush()
         out = json.loads(self.proc.stdout.readline())
-        return [(s["prio"], s["text"]) for s in out.get("says", [])]
+        return [(s["prio"], s.get("spoken", s["text"]), bool(s.get("named"))) for s in out.get("says", [])]
 
     def close(self) -> None:
         self.proc.stdin.close()
@@ -243,6 +248,17 @@ def live(argv: list[str]) -> int:
         sys.exit('needs OpenCV: .dev/venv/bin/pip install "opencv-python==4.12.0.88"')
     model = load_model(a.model, a.threads)
     decider = Decider()
+    # Faces: only if somebody is enrolled (same rule as the hat). Otherwise no face model is loaded.
+    sys.path.insert(0, os.path.join(REPO, "scripts", "faces"))
+    from common import embed_in_box, enrolled, load_config as load_face_config, models as face_models
+    fcfg = load_face_config()
+    people = enrolled(fcfg)
+    face_det = face_rec = None
+    if people:
+        _, face_det, face_rec = face_models(fcfg)
+        print(f"faces: {len(people)} enrolled ({', '.join(people)}); strangers stay 'Person'")
+    else:
+        print("faces: nobody enrolled, no face model runs")
     voice = MacVoice(a.say)
     src = int(a.camera) if a.camera.isdigit() else a.camera
     cap = cv2.VideoCapture(src)
@@ -263,10 +279,18 @@ def live(argv: list[str]) -> int:
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             dets = detect(model, rgb)
             now = time.perf_counter() - t0
-            for prio, text in decider.says(int(now * 1000), dets):
-                print(f"{now:7.1f} s  SAYS [{prio}] {text}")
+            faces = {}
+            if face_det is not None:  # person boxes only; the embeddings live for this frame
+                for i, d in enumerate(dets):
+                    if d.class_id == 0 and d.score >= 0.6:
+                        e = embed_in_box(fcfg, face_det, face_rec, bgr, (d.x, d.y, d.w, d.h))
+                        if e is not None:
+                            faces[i] = e
+            for prio, text, named in decider.says(int(now * 1000), dets, faces):
+                print(f"{now:7.1f} s  SAYS [{prio}] {text}" + ("   (enrolled person)" if named else ""))
                 voice.push(prio, text, now)
                 last_said = text
+            faces.clear()
             voice.pump()
             if a.no_window:
                 continue

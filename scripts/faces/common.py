@@ -80,3 +80,24 @@ def embed_photo(cfg: dict, photo: str):
     f = faces[0]
     emb = rec.feature(rec.alignCrop(img, f)).reshape(-1)
     return [round(float(x), 6) for x in emb], float(f[14]), int(f[2])
+
+
+def embed_in_box(cfg: dict, det, rec, bgr, box) -> list[float] | None:
+    """The embedding of the face inside a person box (x, y, w, h normalised), or None. Same as
+    the hat (device/src/detect/faces.cpp): the top 60% of the box, best face over the score and
+    size limits. In memory only; the caller drops it after the frame."""
+    h, w = bgr.shape[:2]
+    x0, y0 = max(0, int(box[0] * w)), max(0, int(box[1] * h))
+    x1, y1 = min(w, int((box[0] + box[2]) * w)), min(h, int((box[1] + box[3] * 0.6) * h))
+    if x1 - x0 < cfg["min_face_px"] or y1 - y0 < cfg["min_face_px"]:
+        return None
+    roi = bgr[y0:y1, x0:x1].copy()
+    det.setInputSize((roi.shape[1], roi.shape[0]))
+    _, faces = det.detect(roi)
+    if faces is None:
+        return None
+    faces = [f for f in faces if f[2] >= cfg["min_face_px"] and f[14] >= cfg["face_min_score"]]
+    if not faces:
+        return None
+    f = max(faces, key=lambda f: f[14])
+    return [float(x) for x in rec.feature(rec.alignCrop(roi, f)).reshape(-1)]
