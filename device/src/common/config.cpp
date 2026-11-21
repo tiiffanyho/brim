@@ -69,6 +69,30 @@ AppConfig load_app(const std::string& path) {
   return a;
 }
 
+DetectConfig load_detect(const std::string& path) {
+  DetectConfig c;
+  std::string err;
+  auto j = json::parse_file(path, &err);
+  if (!j || !j->is_object()) {
+    BRIM_LOGW("config", "using default detect config (%s)", err.c_str());
+    return c;
+  }
+  c.model_file = j->get_string("model_file", c.model_file);
+  c.threads = static_cast<int>(j->get_int("threads", c.threads));
+  c.budget_ms = j->get_number("budget_ms", c.budget_ms);
+  c.stride = static_cast<int>(j->get_int("stride", c.stride));
+  c.track_match_iou = j->get_number("track_match_iou", c.track_match_iou);
+  c.track_match_window_ms = j->get_int("track_match_window_ms", c.track_match_window_ms);
+  c.track_center_gate = j->get_number("track_center_gate", c.track_center_gate);
+  c.stats_period_s = static_cast<int>(j->get_int("stats_period_s", c.stats_period_s));
+  if (c.threads < 1) c.threads = 1;
+  if (c.threads > 4) c.threads = 4;
+  if (c.stride < 0 || c.stride > 2) c.stride = 0;  // the spec allows every frame or every 2nd frame
+  if (c.budget_ms <= 0) c.budget_ms = 30;
+  if (c.stats_period_s < 1) c.stats_period_s = 5;
+  return c;
+}
+
 schema::Settings default_settings() {
   schema::Settings s;
   s.volume = 80;

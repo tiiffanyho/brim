@@ -42,7 +42,7 @@ cp scripts/pi/start.sh scripts/pi/stop.sh "$STAGE/"
 # TODO(qnx-check): `ldd`-equivalent on QNX is `use -i <bin>` / check with `ldd` from the SDP;
 #   trim this list to what the Pi image is missing.
 if [[ -n "${BRIM_QNX_DEPS_PREFIX:-}" ]]; then
-  for lib in libwebsockets.so* libsqlite3.so*; do
+  for lib in libwebsockets.so* libsqlite3.so* libtensorflowlite_c.so* libtensorflow-lite.so*; do
     cp -P "$BRIM_QNX_DEPS_PREFIX"/lib/$lib "$STAGE/lib/" 2>/dev/null || true
   done
 fi

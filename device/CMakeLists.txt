@@ -20,6 +20,9 @@ endif()
 set_property(CACHE BRIM_IPC_BACKEND PROPERTY STRINGS qnx uds)
 option(BRIM_BUILD_TESTS "Build unit tests" ON)
 option(BRIM_BUILD_APP_SERVER "Build app_server (needs libwebsockets + sqlite3)" ON)
+# TFLite C API (tflite-runtime 2.21.0 from oss.qnx.com) for the person/object detector. On by default
+# for QNX. On the laptop it is off: brim runs --fake with the stub detector there.
+option(BRIM_WITH_TFLITE "Link the TFLite C API for real detection" ${BRIM_IS_QNX})
 
 set(BRIM_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(BRIM_SHARED_GEN ${BRIM_REPO_ROOT}/shared/gen)
@@ -57,14 +60,29 @@ message(STATUS "Brim IPC backend: ${BRIM_IPC_BACKEND}")
 add_library(brim_pipeline STATIC
   src/capture/camera.cpp
   src/detect/detector.cpp
+  src/detect/tflite_detector.cpp
   src/safety/safety_monitor.cpp
   src/audio/speak_queue.cpp
   src/audio/audio_out.cpp
 )
 target_link_libraries(brim_pipeline PUBLIC brim_common)
-# TODO(ai): when real models land, link mediapipe / tflite-runtime / OpenCV from oss.qnx.com here,
-#   e.g. find_library(TFLITE_LIB tensorflowlite) under BRIM_QNX_DEPS_PREFIX, guarded by an option
-#   BRIM_WITH_AI so the laptop build keeps working without them.
+if(BRIM_WITH_TFLITE)
+  # TODO(qnx-check): confirm the header and library names the tflite-runtime-dev package installs:
+  #   on the Pi `apk info -L tflite-runtime-dev | grep -E 'c_api.h|\.so|\.a$'`. Extract the same
+  #   package into BRIM_QNX_DEPS_PREFIX for cross-compiling.
+  find_path(TFLITE_INCLUDE_DIR tensorflow/lite/c/c_api.h PATH_SUFFIXES include usr/include)
+  find_library(TFLITE_C_LIB NAMES tensorflowlite_c tensorflow-lite tensorflowlite PATH_SUFFIXES lib usr/lib)
+  if(TFLITE_INCLUDE_DIR AND TFLITE_C_LIB)
+    target_include_directories(brim_pipeline PRIVATE ${TFLITE_INCLUDE_DIR})
+    target_link_libraries(brim_pipeline PUBLIC ${TFLITE_C_LIB})
+    target_compile_definitions(brim_pipeline PRIVATE BRIM_WITH_TFLITE=1)
+    message(STATUS "TFLite C API: ${TFLITE_INCLUDE_DIR}, ${TFLITE_C_LIB}")
+  else()
+    # Not fatal, so the rest of the device still builds; brim then reports detection as a spoken fault.
+    message(WARNING "BRIM_WITH_TFLITE=ON but tensorflow/lite/c/c_api.h or the TFLite library was not found "
+                    "(set BRIM_QNX_DEPS_PREFIX). Building without detection.")
+  endif()
+endif()
 
 add_library(brim_dashboard STATIC src/dashboard/dashboard.cpp)
 target_link_libraries(brim_dashboard PUBLIC brim_common)

@@ -1,0 +1,11 @@
+{
+  "_comment": "Person/object detector and anonymous tracker. Confidence thresholds live in safety.json (min_confidence, phone_min_confidence). budget_ms is the per-frame detect budget from models/README.md; with stride 0 brim runs the detector every frame and drops to every 2nd frame while the average is over budget. Tracks match by box overlap (track_match_iou) or a short centre jump (track_center_gate, in box sizes) within track_match_window_ms.",
+  "model_file": "efficientdet_lite0.tflite",
+  "threads": 4,
+  "budget_ms": 30,
+  "stride": 0,
+  "track_match_iou": 0.3,
+  "track_match_window_ms": 1500,
+  "track_center_gate": 0.6,
+  "stats_period_s": 5
+}

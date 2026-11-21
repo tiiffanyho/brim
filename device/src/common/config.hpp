@@ -32,6 +32,18 @@ struct NavThresholds {
   std::int64_t decision_hold_ms = 1500; // keep a direction this long before changing our advice
 };
 
+// Detector and tracker (config/detect.json). Confidence thresholds stay in SafetyThresholds.
+struct DetectConfig {
+  std::string model_file = "efficientdet_lite0.tflite";  // inside AppConfig::models_dir
+  int threads = 4;                         // TFLite CPU threads (Pi 5 has 4 cores)
+  double budget_ms = 30;                   // per-frame detect budget (models/README.md)
+  int stride = 0;                          // 0 = auto (every frame, every 2nd when over budget), 1 or 2 = fixed
+  double track_match_iou = 0.3;            // overlap that means "same thing as last frame"
+  std::int64_t track_match_window_ms = 1500;  // a track unseen this long is not matched again
+  double track_center_gate = 0.6;          // centre jump (in box sizes) still counted as the same thing
+  int stats_period_s = 5;                  // how often brim logs per-stage detect timings
+};
+
 struct AppConfig {
   std::string data_dir = "data";            // SQLite DB only (never frames, never audio of people)
   std::string run_dir = "/tmp/brim";        // UDS sockets on host
@@ -47,6 +59,7 @@ struct AppConfig {
 SafetyThresholds load_safety(const std::string& path);
 NavThresholds load_nav(const std::string& path);
 AppConfig load_app(const std::string& path);
+DetectConfig load_detect(const std::string& path);
 std::string config_dir();
 
 // The one definition of the wearer's default settings, shared by brim (before app_server has sent

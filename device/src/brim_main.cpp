@@ -21,12 +21,15 @@
 // Flags: --fake            scripted fake events, no hardware (laptop default via scripts/dev.sh)
 //        --hang-after <s>  demo: freeze the pipeline after s seconds (supervisor must restart us)
 //        SIGUSR1           demo: freeze the pipeline now
+#include <atomic>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <random>
 #include <thread>
+#include <vector>
 
 #include "audio/audio_out.hpp"
 #include "audio/speak_queue.hpp"
@@ -66,12 +69,14 @@ struct Ctx {
   config::AppConfig app;
   config::SafetyThresholds safety;
   config::NavThresholds nav;
+  config::DetectConfig detect;
   bool fake = false;
   events::EventStamper stamper{"brim"};
   ipc::EventBus* bus = nullptr;
   audio::SpeakQueue* speak = nullptr;
   audio::AudioOut* audio = nullptr;
   Stats stats;
+  std::atomic<bool> detect_healthy{true};  // written by the pipeline, read by the health thread
 
   template <class E>
   void emit(E& e, std::int64_t capture_ms) {
@@ -247,7 +252,15 @@ class FakeVad final : public audio::VoiceActivity {
 void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::SafetyMonitor& safety_mon,
                    std::int64_t hang_after_ms) {
   FakeScenario fake(c);
-  detect::TrackStore tracks(c.safety.track_forget_s * 1000, c.safety.repeat_suppress_s * 1000);
+  detect::TrackStore tracks(c.safety.track_forget_s * 1000, c.safety.repeat_suppress_s * 1000,
+                            static_cast<float>(c.detect.track_match_iou), c.detect.track_match_window_ms,
+                            static_cast<float>(c.detect.track_center_gate));
+  detect::DetectPacer pacer(c.detect.budget_ms, c.detect.stride);
+  detect::StageStats stage_stats;
+  std::int64_t stats_window_start = timing::mono_ms();
+  std::int64_t last_dets_log_ms = 0;
+  std::vector<detect::Detection> dets;  // reused every frame: no per-frame allocation
+  dets.reserve(32);
   capture::Frame frame;
   std::int64_t start = timing::mono_ms();
   std::int64_t fps_window_start = start;
@@ -280,8 +293,9 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       continue;
     }
 
-    // Real path (the models are stubs today; see TODO(ai) in each module).
+    // Real path: TFLite detector on the Pi (safety and nav models are still TODO(ai)).
     // Cannot-fail rule: a sick detector is spoken out loud, not hidden. We never infer "clear".
+    c.detect_healthy = det.healthy();
     if (!det.healthy() || !safety_mon.healthy()) {
       if (detect_was_healthy) {
         detect_was_healthy = false;
@@ -292,7 +306,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
         c.emit(f, 0);
         c.say(audio::Priority::Safety, "Brim cannot see. Stop and ask for help", now);
       }
-    } else if (!detect_was_healthy) {
+    } else if (!detect_was_healthy) {  // recovered
       detect_was_healthy = true;
       s::FaultEvent f;
       f.component = "detect";
@@ -302,8 +316,48 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       c.say(audio::Priority::Nav, "Brim is working again", now);
     }
 
-    auto dets = det.detect(frame);
+    // Over budget? Then the detector runs on every 2nd frame (DetectPacer). Skipped frames do no
+    // detection-based work at all: we never re-announce or re-judge from a stale frame.
+    if (!pacer.tick()) continue;
+
+    // Detection: resize -> invoke -> decode (timed inside the detector), then tracking.
+    det.detect(frame, dets);
+    const std::int64_t t_track = timing::mono_ns();
     tracks.observe(dets, now);
+    const double track_ms = static_cast<double>(timing::mono_ns() - t_track) / 1e6;
+    const auto st = det.last_stage_times();
+    stage_stats.add(st, track_ms);
+    if (pacer.record(st.total() + track_ms))
+      BRIM_LOGW("detect", "detect avg %.1f ms vs %.0f ms budget: now running %s", pacer.average_ms(),
+                c.detect.budget_ms, pacer.stride() == 2 ? "every 2nd frame" : "every frame");
+    BRIM_LOGD("detect", "frame %llu: %zu found, resize %.1f + invoke %.1f + decode %.1f + track %.1f = %.1f ms (budget %.0f)",
+              static_cast<unsigned long long>(frame.index), dets.size(), st.resize_ms, st.invoke_ms, st.decode_ms, track_ms,
+              st.total() + track_ms, c.detect.budget_ms);
+    if (now - stats_window_start >= c.detect.stats_period_s * 1000LL && stage_stats.runs > 0) {
+      const double n = stage_stats.runs;
+      const double avg_total = (stage_stats.sum.total() + stage_stats.track_sum) / n;
+      const double max_total = stage_stats.max.total() + stage_stats.track_max;  // upper bound
+      BRIM_LOGI("detect",
+                "timing over %d runs (avg/max ms): resize %.1f/%.1f, invoke %.1f/%.1f, decode %.2f/%.2f, track %.2f/%.2f, "
+                "total %.1f/%.1f vs %.0f ms budget %s, %s",
+                stage_stats.runs, stage_stats.sum.resize_ms / n, stage_stats.max.resize_ms, stage_stats.sum.invoke_ms / n,
+                stage_stats.max.invoke_ms, stage_stats.sum.decode_ms / n, stage_stats.max.decode_ms, stage_stats.track_sum / n,
+                stage_stats.track_max, avg_total, max_total, c.detect.budget_ms, avg_total <= c.detect.budget_ms ? "OK" : "OVER",
+                pacer.stride() == 2 ? "every 2nd frame" : "every frame");
+      stage_stats.reset();
+      stats_window_start = now;
+    }
+    if (!dets.empty() && now - last_dets_log_ms >= 1000) {  // what we see, once a second (boxes only, no identity)
+      last_dets_log_ms = now;
+      char line[512];
+      int len = 0;
+      for (const auto& d : dets) {
+        if (len >= static_cast<int>(sizeof(line)) - 64) break;
+        len += std::snprintf(line + len, sizeof(line) - len, "%s %s#%d %.2f [x%.2f y%.2f w%.2f h%.2f]", len ? "," : "",
+                             detect::to_string(d.thing), d.track_id, d.score, d.box.x, d.box.y, d.box.w, d.box.h);
+      }
+      BRIM_LOGI("detect", "%zu seen:%s", dets.size(), line);
+    }
     const auto settings = c.settings();
 
     // 1. Safety first: anything close in front, or a phone pointed at the wearer.
@@ -314,6 +368,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
     }
 
     // 2. Navigation: the safest direction to move, or "Path unclear, stop".
+    // `dets` holds this frame's people, obstacles and phones, each with a track id.
     // TODO(ai): src/nav turns `dets` + NavThresholds into a ClearPathEvent and speaks it at
     //   Priority::Nav, right after the safety alert that made it necessary. Until it exists brim
     //   says nothing about direction rather than guessing one (rule: never give a direction we are
@@ -353,7 +408,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       }
     }
     tracks.expire(now);
-    c.stats.tracks = static_cast<std::int64_t>(tracks.size());
+    c.stats.tracks = static_cast<std::int64_t>(tracks.active(now));
   }
 }
 
@@ -390,7 +445,10 @@ void health_loop(Ctx& c, const char* camera_name, const char* detector_name) {
     h.components = {
         comp("pipeline", pipeline_live ? s::ComponentState::Ok : s::ComponentState::Down, c.fake ? "fake mode" : ""),
         comp("capture", c.fake ? s::ComponentState::Stub : s::ComponentState::Ok, camera_name),
-        comp("detect", s::ComponentState::Stub,
+        comp("detect",
+             c.fake || !std::strcmp(detector_name, "stub") ? s::ComponentState::Stub
+             : c.detect_healthy.load()                    ? s::ComponentState::Ok
+                                                          : s::ComponentState::Down,
              std::string(detector_name) + ", " + std::to_string(c.stats.tracks.load()) + " tracks"),
         comp("safety", s::ComponentState::Stub),
         comp("audio", s::ComponentState::Stub, "log output"),
@@ -476,6 +534,7 @@ int main(int argc, char** argv) {
   c.app = config::load_app(config::config_dir() + "/app.json");
   c.safety = config::load_safety(config::config_dir() + "/safety.json");
   c.nav = config::load_nav(config::config_dir() + "/nav.json");
+  c.detect = config::load_detect(config::config_dir() + "/detect.json");
 
   ipc::EventBus bus(events::kAppServerChannel);
   ipc::EventBus supervisor_bus(events::kSupervisorChannel, 4);
@@ -490,17 +549,25 @@ int main(int argc, char** argv) {
   const bool use_hw = false;
 #endif
   auto cam = use_hw ? capture::make_qnx_camera(c.app.capture_fps) : capture::make_fake_camera(c.app.capture_fps);
-  auto det = use_hw ? detect::make_mediapipe_detector(c.app.models_dir) : detect::make_stub_detector();
+  detect::DetectorConfig dcfg;
+  dcfg.model_path = c.app.models_dir + "/" + c.detect.model_file;
+  dcfg.threads = c.detect.threads;
+  dcfg.min_confidence = static_cast<float>(c.safety.min_confidence);
+  dcfg.phone_min_confidence = static_cast<float>(c.safety.phone_min_confidence);
+  auto det = use_hw ? detect::make_tflite_detector(dcfg) : detect::make_stub_detector();
   auto safety_mon = use_hw ? safety::make_vision_safety_monitor(c.safety, c.nav) : safety::make_stub_safety_monitor();
   auto audio_out = use_hw ? audio::make_qnx_audio_out(c.app.audio_dir) : audio::make_log_audio_out();
   std::unique_ptr<audio::VoiceActivity> vad = fake ? std::unique_ptr<audio::VoiceActivity>(new FakeVad) : audio::make_stub_vad();
   c.audio = audio_out.get();
   c.apply_settings(config::default_settings());  // until app_server sends the stored ones
 
-  if (!cam->open() || !det->load()) {
-    BRIM_LOGE("brim", "module init failed");  // supervisor will restart us
+  if (!cam->open()) {
+    BRIM_LOGE("brim", "camera init failed");  // supervisor will restart us
     return 1;
   }
+  // A detector that will not load is not a reason to die in a restart loop: keep running so the
+  // pipeline sees det->healthy() == false and speaks "Brim cannot see" (cannot-fail rule).
+  if (!det->load()) BRIM_LOGE("brim", "detector %s failed to load: running degraded, fault will be spoken", det->name());
 
   BRIM_LOGI("brim", "started (mode=%s, ipc=%s, camera=%s, detect=%s)", fake ? "fake" : "real", ipc::backend_name(), cam->name(),
             det->name());
