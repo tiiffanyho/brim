@@ -15,3 +15,5 @@ models/*.tflite
 models/*.task
 models/*.bin
 .dev-run.log
+# traffic light test photos (teammates who agreed): local only, never committed
+data/traffic_test/

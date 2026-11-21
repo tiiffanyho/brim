@@ -41,7 +41,8 @@ runs on embedded hardware (not cloud).
 - `shared/events.schema.json` is the single source of truth for every event and API payload.
   After editing it run `node shared/gen/generate.mjs` and commit the regenerated files
   (CI fails if `shared/gen/` is stale). Never hand-edit `shared/gen/events.*`.
-  Events: `person_seen`, `obstacle_seen`, `clear_path`, `safety_alert`, `fault`, `health`.
+  Events: `person_seen`, `obstacle_seen`, `clear_path`, `safety_alert`, `fault`, `health`, and
+  `traffic_light_seen` (traffic light feasibility test only: never walk/cross/go, never a direction).
   Don't change the schema or the REST routes without asking first.
 - Processes: `brim` (real-time pipeline, high priority), `supervisor` (restarts brim, watchdog),
   `app_server` (lowest priority, REST + WebSocket + static PWA + SQLite). brim must never block on

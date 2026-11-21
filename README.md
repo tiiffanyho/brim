@@ -46,8 +46,8 @@ the build if an identity field reappears in the schema.
 
 - **`shared/events.schema.json`** is the single source of truth. `node shared/gen/generate.mjs`
   writes `shared/gen/events.ts` (PWA) and `shared/gen/events.gen.hpp` (C++ structs + JSON).
-  The six events are `person_seen`, `obstacle_seen`, `clear_path`, `safety_alert`, `fault`,
-  `health`.
+  The events are `person_seen`, `obstacle_seen`, `clear_path`, `safety_alert`, `fault`,
+  `health`, plus `traffic_light_seen` for the traffic light feasibility test (off by default).
 - **The camera is the only sensor.** There is no distance sensor, so "close" is estimated from how
   much of the frame a box fills (`area_frac` → `proximity`), and `clear_path` only names a direction
   when it is sure; otherwise it says *Path unclear, stop*.
@@ -84,6 +84,8 @@ Things to try:
 | `kill -USR1 $(pgrep -x brim)` | Freezes brim's pipeline. The supervisor restarts it in about 1.3 s, and the phone shows *restarting → recovered*. |
 | `scripts/fake_events.py` | Sends extra random events straight into app_server (handy for PWA-only work). |
 | `scripts/smoke_test.sh` | Full end-to-end check (also runs in CI). |
+| `scripts/laptop/brim_test.py photo.jpg` | The hat's detector on photos (same model, input and outputs). |
+| `scripts/test_traffic.py` | Traffic light feasibility test on labelled photos in `data/traffic_test/` (git-ignored); `--self-test` checks the colour check alone. Lab only, never near roads. |
 | `cd device && ctest --preset host` | C++ unit tests: schema, detection geometry, privacy, speak queue, SQLite layer, REST API. |
 | `cd app && npm test && npm run lint && npm run typecheck` | PWA tests, jsx-a11y lint, types. |
 
@@ -118,9 +120,11 @@ device/       C++17 + CMake. Presets: host, qnx-aarch64le (cmake/qnx-aarch64le.c
   tests/                   dependency-free unit tests (also buildable for QNX)
 app/          Vite + React + TS PWA: src/api, src/screens, src/a11y; public/ manifest + service worker
 data/migrations/  versioned SQLite schema (PRAGMA user_version)
-config/       safety.json (close/confidence thresholds), nav.json (clear-path thresholds), app.json
+config/       safety.json (close/confidence thresholds), nav.json (clear-path thresholds), app.json,
+              traffic.json (traffic light test: colour thresholds, cue off by default)
 models/       on-device models (see models/README.md)
-scripts/      dev.sh, deploy.sh, smoke_test.sh, fake_events.py, probe_model.py, pi/start.sh, pi/stop.sh
+scripts/      dev.sh, deploy.sh, smoke_test.sh, fake_events.py, probe_model.py, test_traffic.py,
+              laptop/brim_test.py, pi/start.sh, pi/stop.sh
 ```
 
 `src/nav` (the clear-path decision) is the next phase; until it exists brim says nothing about
