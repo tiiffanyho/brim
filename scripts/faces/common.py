@@ -67,6 +67,14 @@ def embed_photo(cfg: dict, photo: str):
     img = cv2.imread(photo)  # BGR, as the models want
     if img is None:
         sys.exit(f"cannot read {photo}")
+    out, err = embed_image(cfg, cv2, det, rec, img)
+    if out is None:
+        sys.exit(err)
+    return out
+
+
+def embed_image(cfg: dict, cv2, det, rec, img):
+    """((embedding, face score, face px), None) for the one face in a BGR image, or (None, reason)."""
     scale = min(1.0, 1280.0 / max(img.shape[:2]))  # big phone photos: shrink so detection is quick
     if scale < 1.0:
         img = cv2.resize(img, (int(img.shape[1] * scale), int(img.shape[0] * scale)))
@@ -74,12 +82,12 @@ def embed_photo(cfg: dict, photo: str):
     _, faces = det.detect(img)
     faces = [] if faces is None else [f for f in faces if f[2] >= cfg["min_face_px"]]
     if not faces:
-        sys.exit("no clear face in that photo (need one face, looking at the camera, not too small)")
+        return None, "no clear face (need one face, looking at the camera, not too small)"
     if len(faces) > 1:
-        sys.exit(f"{len(faces)} faces in that photo: use a photo of only the person being enrolled")
+        return None, f"{len(faces)} faces: only the person being enrolled may be in view"
     f = faces[0]
     emb = rec.feature(rec.alignCrop(img, f)).reshape(-1)
-    return [round(float(x), 6) for x in emb], float(f[14]), int(f[2])
+    return ([round(float(x), 6) for x in emb], float(f[14]), int(f[2])), None
 
 
 def embed_in_box(cfg: dict, det, rec, bgr, box) -> list[float] | None:

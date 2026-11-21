@@ -241,6 +241,8 @@ def live(argv: list[str]) -> int:
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--say", action="store_true", help="speak the SAYS lines on the Mac")
     ap.add_argument("--no-window", action="store_true", help="no preview window (replaying a video file)")
+    ap.add_argument("--why", action="store_true",
+                    help="once a second, print each step: person found? close? face found? match score? (numbers only)")
     a = ap.parse_args(argv)
     try:
         import cv2
@@ -271,6 +273,14 @@ def live(argv: list[str]) -> int:
     print(f"camera {a.camera} open; q in the window quits. Nothing is saved.")
     t0 = time.perf_counter()
     last_said = ""
+    last_why = -1.0
+    if a.why and face_rec is not None:  # enrolled embeddings, for the --why printout only (C++ decides)
+        import numpy as np
+        refs = {}
+        for name in people:
+            with open(os.path.join(fcfg["faces_dir"] if os.path.isabs(fcfg["faces_dir"]) else os.path.join(REPO, fcfg["faces_dir"]),
+                                   name, "embeddings.json")) as f:
+                refs[name] = [np.asarray(e, dtype=np.float32) / np.linalg.norm(e) for e in json.load(f)["embeddings"]]
     try:
         while True:
             ok, bgr = cap.read()
@@ -286,6 +296,29 @@ def live(argv: list[str]) -> int:
                         e = embed_in_box(fcfg, face_det, face_rec, bgr, (d.x, d.y, d.w, d.h))
                         if e is not None:
                             faces[i] = e
+            if a.why and now - last_why >= 1.0:
+                last_why = now
+                persons = [d for d in dets if d.class_id == 0]
+                if not persons:
+                    print(f"{now:7.1f} s  why: no person box at all")
+                else:
+                    p = max(persons, key=lambda d: d.score)
+                    i = dets.index(p)
+                    msg = (f"{now:7.1f} s  why: person score {p.score:.2f} (need 0.60), fills {p.w * p.h:.0%} of the frame "
+                           f"(close >= 18%, centre x {p.x + p.w / 2:.2f})")
+                    if face_det is None:
+                        msg += " | nobody enrolled"
+                    elif p.score < 0.6:
+                        msg += " | face not checked (person score too low)"
+                    elif i not in faces:
+                        msg += " | NO FACE found in the box (too small, turned away, dark, or face score < "
+                        msg += f"{fcfg['face_min_score']})"
+                    else:
+                        e = np.asarray(faces[i], dtype=np.float32)
+                        e = e / np.linalg.norm(e)
+                        best = max(((n, max(float(r @ e) for r in rs)) for n, rs in refs.items()), key=lambda t: t[1])
+                        msg += f" | face found, best match {best[0]} {best[1]:.2f} (need {fcfg['match_threshold']})"
+                    print(msg)
             for prio, text, named in decider.says(int(now * 1000), dets, faces):
                 print(f"{now:7.1f} s  SAYS [{prio}] {text}" + ("   (enrolled person)" if named else ""))
                 voice.push(prio, text, now)
