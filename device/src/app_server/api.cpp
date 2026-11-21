@@ -43,14 +43,6 @@ schema::Command reload_settings_command(const schema::Settings& s) {
   return c;
 }
 
-schema::Command speak_pairing_pin_command(const std::string& pin) {
-  schema::Command c;
-  c.t_mono_ms = timing::mono_ms();
-  c.command = schema::CommandKind::SpeakPairingPin;
-  c.pin = pin;
-  return c;
-}
-
 int query_int(const std::string& query, const std::string& key, int def, int lo, int hi) {
   std::string k = key + "=";
   std::size_t i = 0;

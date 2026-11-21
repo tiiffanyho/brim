@@ -42,17 +42,19 @@ bool SpeakQueue::push(SpeechItem item) {
   return true;
 }
 
-void SpeakQueue::drop_stale_info(std::int64_t now_ms) {
-  auto& info = q_[static_cast<int>(Priority::Info)];
-  while (!info.empty() && now_ms - info.front().created_ms > cfg_.info_max_age_ms) {
-    info.pop_front();
-    dropped_stale_++;
+void SpeakQueue::drop_stale(std::int64_t now_ms) {
+  for (Priority p : {Priority::Nav, Priority::Info}) {  // safety is never dropped for age
+    auto& d = q_[static_cast<int>(p)];
+    while (!d.empty() && now_ms - d.front().created_ms > cfg_.info_max_age_ms) {
+      d.pop_front();
+      dropped_stale_++;
+    }
   }
 }
 
-std::optional<SpeechItem> SpeakQueue::pop_next(std::int64_t now_ms, bool someone_talking) {
+std::optional<SpeechItem> SpeakQueue::pop_next(std::int64_t now_ms) {
   std::lock_guard<std::mutex> lk(mu_);
-  drop_stale_info(now_ms);
+  drop_stale(now_ms);
 
   auto take = [](std::deque<SpeechItem>& d) {
     SpeechItem it = std::move(d.front());
@@ -60,12 +62,12 @@ std::optional<SpeechItem> SpeakQueue::pop_next(std::int64_t now_ms, bool someone
     return it;
   };
 
-  if (!q_[0].empty()) return take(q_[0]);  // safety: always, even over talking
+  if (!q_[0].empty()) return take(q_[0]);  // safety and faults: always first
   if (!q_[1].empty()) return take(q_[1]);  // navigation: right after the warning that caused it
   auto& info = q_[2];
-  if (info.empty() || someone_talking) return std::nullopt;
-  if (last_info_spoken_ms_ && now_ms - *last_info_spoken_ms_ < cfg_.info_min_interval_ms) return std::nullopt;
-  last_info_spoken_ms_ = now_ms;
+  if (info.empty()) return std::nullopt;
+  if (last_info_sent_ms_ && now_ms - *last_info_sent_ms_ < cfg_.info_min_interval_ms) return std::nullopt;
+  last_info_sent_ms_ = now_ms;
   return take(info);
 }
 

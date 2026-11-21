@@ -6,9 +6,9 @@
 //     /*       static PWA from --static  — LWSMPRO_FILE mount (app/dist)
 //   relay thread: bus -> validate -> SQLite -> broadcast queue -> lws_cancel_service() wakes lws.
 //
-//   At startup it also tells brim two things over the command channel (retrying until brim is up):
-//   the pairing PIN, so brim speaks it in the wearer's earpiece, and the saved settings, so brim
-//   never has to read SQLite.
+//   At startup it sends brim the saved settings over the command channel (retrying until brim is
+//   up), so brim never has to read SQLite. The pairing PIN stays here: it is shown on the HDMI
+//   dashboard only. The Pi plays no sound, and the PIN never goes on the phone event stream.
 //
 // usage: app_server [--port 8080] [--db data/brim.db] [--data-dir data] [--migrations data/migrations]
 //                   [--static app/dist] [--pin 123456 (dev only)]
@@ -425,13 +425,13 @@ int main(int argc, char** argv) {
   ::mkdir(run_dir.c_str(), 0700);
   auto dash = dashboard::make_log_dashboard(run_dir);
   dash->show_pairing(pin, lan_url(port));
-  dash->show_status("The hat speaks this code in the earpiece too, so the wearer can pair alone.");
+  dash->show_status("Read this code to the wearer, or type it into their phone.");
   BRIM_LOGI("app_server", "listening on :%d (lws %s), static=%s, db=%s", port, lws_get_library_version(), static_abs,
             db_path.c_str());
 
   std::thread relay([&] { app::run_relay(*db, state, broadcast_from_any_thread, g_stop); });
 
-  // Hand brim the pairing PIN (it speaks it in the earpiece) and the saved settings. brim is
+  // Hand brim the saved settings. brim is
   // spawned by the supervisor in parallel with us, and a command sent to a channel nobody is
   // listening on yet is dropped, so retry for up to 30 s until the bus confirms a delivery.
   // After that, re-send the settings whenever the supervisor restarts brim: a fresh brim starts
@@ -440,16 +440,13 @@ int main(int argc, char** argv) {
     auto send_settings = [&] { cmd_bus.publish(schema::to_json(app::reload_settings_command(db->get_settings())).dump()); };
     for (int attempt = 0; attempt < 30 && !g_stop; ++attempt) {
       const std::uint64_t before = cmd_bus.sent();
-      cmd_bus.publish(schema::to_json(app::speak_pairing_pin_command(pin)).dump());
       send_settings();
       for (int i = 0; i < 10 && !g_stop; ++i) timing::sleep_ms(100);
-      if (cmd_bus.sent() >= before + 2) {
-        BRIM_LOGI("app_server", "brim has the pairing PIN (spoken in the earpiece) and the saved settings");
+      if (cmd_bus.sent() >= before + 1) {
+        BRIM_LOGI("app_server", "brim has the saved settings");
         break;
       }
-      if (attempt == 29 && !g_stop)
-        BRIM_LOGW("app_server", "brim never took the pairing PIN; it is on the dashboard and in %s/pairing.txt",
-                  run_dir.c_str());
+      if (attempt == 29 && !g_stop) BRIM_LOGW("app_server", "brim never took the saved settings; it runs on defaults");
     }
     std::int64_t seen_restarts = state.restart_count.load();
     while (!g_stop) {
