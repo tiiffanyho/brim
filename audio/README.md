@@ -5,7 +5,8 @@ safety warnings and no cloud TTS. Generate the fixed phrases on a Mac with:
 
     scripts/make_audio.sh        # macOS `say` -> audio/*.wav
 
-Per-person name clips ("Sam") are recorded during enrollment and stored in `data/clips/<id>.wav`
-(not here); "forget <name>" deletes them.
+There are no per-person clips: Brim never learns who anyone is, so every phrase it can say is a
+fixed one and lives here. Obstacle names, sides ("on your left") and closeness ("close by") are
+separate clips that the speech layer stitches together.
 
 Files are git-ignored; `scripts/deploy.sh` copies this folder to the Pi.

@@ -1,13 +1,26 @@
 # Brim
 
-A hat for blind and low-vision people. A Raspberry Pi 5 running **QNX 8.0** recognizes the people
-you've enrolled ("Sam is here"), notices social cues (waving, smiling), warns about head-height
-obstacles and steps, and speaks through an earpiece. A phone PWA (VoiceOver/TalkBack-first)
-manages people, shows activity, alerts and device health. **Everything runs on the hat: no cloud,
-no internet, no video recording.**
+A hat that keeps a blind or low-vision wearer safe and tells them the safest way to move. A
+Raspberry Pi 5 running **QNX 8.0** watches through a webcam, warns when a person or object is close
+in front ("person close ahead") or when a phone is pointed at the wearer, then says which way is
+safe ("step right") — or "Path unclear, stop" when nothing is. It also names obstacles and says
+where people are, without ever saying *who* they are. A phone PWA (VoiceOver/TalkBack-first) shows
+activity, alerts, settings and device health.
 
-> Status: **skeleton + pipelines**. All plumbing works end to end with fake data; camera, AI
-> models and audio are stubs marked `TODO(hw)`, `TODO(ai)` and `TODO(qnx-check)`.
+**Everything runs on the hat: no cloud, no internet, no recording, and no face recognition.**
+
+> Status: **skeleton + pipelines**. All plumbing works end to end with fake data; camera, AI models
+> and audio are stubs marked `TODO(hw)`, `TODO(ai)` and `TODO(qnx-check)`.
+
+## Privacy, in one paragraph
+
+Brim does not know who anyone is and cannot learn. There is no face detector, no face embedding, no
+gallery and no names anywhere in the code, the schema or the database — a person is a box with a
+throw-away `track_id` that means "the same person as a moment ago" and nothing more. Boxes live in
+memory for a few seconds; every track is cleared within 30 minutes, and the phone's history is
+purged on the same clock. No frames, no audio and no photos are ever written to disk, and the only
+network traffic is to our own phone app on the local Wi-Fi. `device/tests/test_privacy.cpp` fails
+the build if an identity field reappears in the schema.
 
 ## Architecture
 
@@ -17,22 +30,31 @@ no internet, no video recording.**
  │     │ spawns                                                                      │
  │     ▼                                                                             │
  │  brim (prio 20)                                                                   │
- │   capture → faces → recognize → cues / safety ──► SpeakQueue ──► audio (earpiece)  │
- │                                     │  safety > name > cue, cues wait for silence │
+ │   capture → detect (people + objects, anon tracks) → safety → nav                 │
+ │                                     │           └──► SpeakQueue ──► earpiece      │
+ │                                     │               safety > nav > info           │
  │                                     ▼                                             │
  │                       EventBus (QNX MsgSend / pulses)                             │
  │                                     ▼                                             │
  │  app_server (prio 8): validate → SQLite → WebSocket / REST / static PWA (lws)     │
+ │                       ──commands──► brim: reload_settings, speak_pairing_pin      │
  └─────────────────────────────────────┬─────────────────────────────────────────────┘
                                        │ local Wi-Fi only, PIN pairing + HttpOnly cookie
-                                   Phone PWA (People · Activity · Alerts · Settings · Health)
+                                 Phone PWA (Activity · Alerts · Settings · Health)
 ```
 
 - **`shared/events.schema.json`** is the single source of truth. `node shared/gen/generate.mjs`
   writes `shared/gen/events.ts` (PWA) and `shared/gen/events.gen.hpp` (C++ structs + JSON).
+  The six events are `person_seen`, `obstacle_seen`, `clear_path`, `safety_alert`, `fault`,
+  `health`.
+- **The camera is the only sensor.** There is no distance sensor, so "close" is estimated from how
+  much of the frame a box fills (`area_frac` → `proximity`), and `clear_path` only names a direction
+  when it is sure; otherwise it says *Path unclear, stop*.
 - **IPC** (`device/src/ipc/`): one interface, two backends chosen at build time. On QNX it uses
   `name_attach`/`MsgSendv`/`MsgSendPulse`; on the laptop it uses Unix datagram sockets.
   brim never blocks on app_server: publishing goes into a bounded queue that drops the oldest event when full.
+- **brim never reads SQLite.** app_server sends it the saved settings (and re-sends them after a
+  restart) and the pairing PIN, which brim speaks in the earpiece — there is no display on the hat.
 - **Every event carries `t_mono_ms`** (CLOCK_MONOTONIC). app_server stamps `t_relay_mono_ms`, and
   Device health shows the camera→event and internal relay delays.
 
@@ -46,9 +68,10 @@ scripts/dev.sh
 ```
 
 That generates the types, builds and unit-tests the device code, then starts app_server, the
-supervisor with `brim --fake`, and Vite. It prints a URL and a **6-digit PIN**. Open the URL (or
-the LAN URL on your phone, on the same Wi-Fi) and enter the PIN. You'll see "Sam is here",
-cues, safety alerts and health arriving live. The screen reader hears them through ARIA live regions.
+supervisor with `brim --fake`, and Vite. It prints a URL and a **6-digit PIN** (the same PIN brim
+"speaks" — look for `SAY [nav] "Pairing code …"` in the log). Open the URL (or the LAN URL on your
+phone, on the same Wi-Fi) and enter the PIN. You'll see safety warnings, directions, people,
+obstacles and health arriving live. The screen reader hears them through ARIA live regions.
 
 Things to try:
 
@@ -57,10 +80,10 @@ Things to try:
 | `kill -USR1 $(pgrep -x brim)` | Freezes brim's pipeline. The supervisor restarts it in about 1.3 s, and the phone shows *restarting → recovered*. |
 | `scripts/fake_events.py` | Sends extra random events straight into app_server (handy for PWA-only work). |
 | `scripts/smoke_test.sh` | Full end-to-end check (also runs in CI). |
-| `cd device && ctest --preset host` | C++ unit tests: schema, SQLite layer, speak queue, privacy, REST API. |
+| `cd device && ctest --preset host` | C++ unit tests: schema, detection geometry, privacy, speak queue, SQLite layer, REST API. |
 | `cd app && npm test && npm run lint && npm run typecheck` | PWA tests, jsx-a11y lint, types. |
 
-Dev data lives in `.dev/data` (git-ignored). Delete it to reset the demo people.
+Dev data lives in `.dev/data` (git-ignored). Delete it to reset.
 
 ## Deploy to the Pi
 
@@ -72,7 +95,8 @@ BRIM_PI_HOST=192.168.1.42 scripts/deploy.sh   # BRIM_PI_USER (root), BRIM_PI_DIR
 
 `deploy.sh` cross-compiles with the `qnx-aarch64le` preset and builds the PWA. It copies the
 binaries, `app/dist`, config, migrations, models and audio over scp, then runs `scripts/pi/start.sh`
-over ssh. On the Pi, open `http://<pi-ip>:8080` and pair with the PIN printed in `/tmp/brim/pairing.txt`.
+over ssh. On the Pi, open `http://<pi-ip>:8080` and pair with the PIN the earpiece says (it is also
+in `/tmp/brim/pairing.txt` and on the HDMI dashboard).
 
 ## Repo layout
 
@@ -81,30 +105,38 @@ shared/       events.schema.json, gen/ (generator + generated TS/C++), examples/
 device/       C++17 + CMake. Presets: host, qnx-aarch64le (cmake/qnx-aarch64le.cmake)
   src/common  json, logging, timing/deadlines, config, sysinfo, event stamping
   src/ipc     EventBus: bus_qnx.cpp (Pi) | bus_uds.cpp (laptop)
-  src/capture src/faces src/recognize src/cues src/safety src/audio   pipeline modules (stubs + interfaces)
+  src/capture src/detect src/safety src/audio      pipeline modules (stubs + interfaces)
   src/brim_main.cpp        pipeline wiring + --fake scenario
   src/supervisor/          heartbeat, restart, fault events, watchdog interface
   src/app_server/          lws server, REST router (api.cpp), relay, SQLite (db.cpp), pairing
-  src/dashboard/           hat display stub (shows the PIN)
+  src/dashboard/           HDMI demo dashboard stub (shows the PIN)
   tests/                   dependency-free unit tests (also buildable for QNX)
 app/          Vite + React + TS PWA: src/api, src/screens, src/a11y; public/ manifest + service worker
 data/migrations/  versioned SQLite schema (PRAGMA user_version)
-config/       cues.json (thresholds), app.json (paths, ports, rates)
+config/       safety.json (close/confidence thresholds), nav.json (clear-path thresholds), app.json
 models/ audio/    on-device models and pre-rendered speech (see their READMEs)
 scripts/      dev.sh, deploy.sh, smoke_test.sh, fake_events.py, make_audio.sh, pi/start.sh, pi/stop.sh
 ```
 
+`src/nav` (the clear-path decision) is the next phase; until it exists brim says nothing about
+direction in the real pipeline rather than guessing one.
+
 ## REST API (all under `/api`, cookie required except `/pair`)
 
-`POST /pair` · `GET /health` · `GET /people` · `PATCH|DELETE /people/:id` · `GET /activity?limit=` ·
-`GET /alerts?limit=` · `GET|PUT /settings` · WebSocket `/ws` (subprotocol `brim-events`).
-`DELETE /people/:id` deletes the embedding and name clip (only inside the data dir) before
-removing the row, and tells brim to drop the embedding from memory.
+`POST /pair` · `GET /health` · `GET /activity?limit=` · `GET /alerts?limit=` · `GET|PUT /settings` ·
+WebSocket `/ws` (subprotocol `brim-events`).
 
-## Privacy rules (enforced in code + tests)
+There is no `/api/people`: the hat does not recognize anyone, so there is nobody to list, rename or
+forget. `PUT /settings` saves the settings and sends them to brim in the `reload_settings` command.
 
-- Only enrolled people have names. Strangers get a temporary `stranger-N` id. They are forgotten
-  in brim's memory and purged from SQLite 30 minutes after they were last seen.
-- No frames are ever written to disk.
-- Forgetting a person deletes their fingerprint and voice clip, and their sighting history.
-- The phone never announces strangers.
+## Safety and privacy rules (enforced in code + tests)
+
+- Nobody is identified. No face detection, no embeddings, no names, no identity lookup.
+- A `track_id` is forgotten within 30 minutes, and the same person coming back later is a new,
+  unrelated id. Phone history is purged on the same 30-minute clock.
+- No frames, audio or photos are written to disk, ever.
+- Safety comes first, then navigation: a direction is never spoken before the warning that caused
+  it, and an unclear path is spoken as "Path unclear, stop" rather than a guess.
+- An obstacle is never named unless it was seen with confidence; otherwise it is just "something".
+- If detection is down, brim says so out loud and reports a `fault` — it never implies the path is
+  clear.

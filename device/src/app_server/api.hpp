@@ -2,14 +2,14 @@
 //
 //   POST   /api/pair            {pin}            -> 200 + Set-Cookie | 401 | 429   (no auth)
 //   GET    /api/health                           -> HealthResponse
-//   GET    /api/people                           -> Person[]
-//   PATCH  /api/people/:id      PersonPatch      -> Person
-//   DELETE /api/people/:id                       -> 204 (deletes name clip + embedding files)
-//   GET    /api/activity?limit=N                 -> ActivityItem[]
+//   GET    /api/activity?limit=N                 -> ActivityItem[]  (anonymous sightings)
 //   GET    /api/alerts?limit=N                   -> Alert[]
 //   GET    /api/settings                         -> Settings
-//   PUT    /api/settings        Settings         -> Settings
+//   PUT    /api/settings        Settings         -> Settings  (and sends them to brim)
 // Every route except /api/pair requires the session cookie. Errors are ApiError JSON.
+//
+// There is no /api/people: Brim does not recognize faces, so there is nobody to list, rename or
+// forget.
 #pragma once
 
 #include <functional>
@@ -41,8 +41,8 @@ struct HttpResponse {
 class Api {
  public:
   using CommandSink = std::function<void(const schema::Command&)>;
-  Api(Db& db, Pairing& pairing, ServerState& state, std::string data_dir, CommandSink send_command)
-      : db_(db), pairing_(pairing), state_(state), data_dir_(std::move(data_dir)), send_(std::move(send_command)) {}
+  Api(Db& db, Pairing& pairing, ServerState& state, CommandSink send_command)
+      : db_(db), pairing_(pairing), state_(state), send_(std::move(send_command)) {}
 
   HttpResponse handle(const HttpRequest& req);
   bool authorized(const std::string& cookie_header);
@@ -50,15 +50,19 @@ class Api {
  private:
   HttpResponse pair(const HttpRequest& req);
   HttpResponse health();
-  HttpResponse people_item(const HttpRequest& req, std::int64_t id);
   HttpResponse settings(const HttpRequest& req);
 
   Db& db_;
   Pairing& pairing_;
   ServerState& state_;
-  std::string data_dir_;
   CommandSink send_;
 };
+
+// Builds the reload_settings command brim applies (settings travel with the command so brim never
+// reads SQLite). Used by the API and at startup, so a fresh brim gets the stored settings.
+schema::Command reload_settings_command(const schema::Settings& s);
+// Builds the command that makes brim speak the pairing PIN in the earpiece.
+schema::Command speak_pairing_pin_command(const std::string& pin);
 
 // Query helper: returns the integer value of `key` clamped to [lo, hi], or def.
 int query_int(const std::string& query, const std::string& key, int def, int lo, int hi);

@@ -68,8 +68,9 @@ export function BrimProvider({ children }: { children: ReactNode }) {
       if (e.type === "fault") setFaults((f) => [e, ...f].slice(0, 20));
       if (e.type === "safety_alert") setUnreadAlerts((n) => n + 1);
       const a = describeEvent(e);
-      const critical = e.type === "safety_alert" && e.severity === "critical";
-      if (a && deduper.current.shouldAnnounce(a, Date.now(), critical)) announce(a.text, a.politeness);
+      // Never swallow a critical warning or a "Path unclear, stop" because it was said recently.
+      const urgent = (e.type === "safety_alert" && e.severity === "critical") || (e.type === "clear_path" && !e.clear);
+      if (a && deduper.current.shouldAnnounce(a, Date.now(), urgent)) announce(a.text, a.politeness);
       subscribers.current.forEach((fn) => fn(e));
     },
     [announce],

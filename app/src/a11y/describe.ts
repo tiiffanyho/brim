@@ -1,5 +1,5 @@
 // Turns events into short sentences for screen readers. Pure functions (unit-tested).
-import type { BrimEvent, Direction } from "@schema";
+import type { BrimEvent, Direction, ObstacleKind, Proximity } from "@schema";
 
 export type Politeness = "polite" | "assertive";
 export interface Announcement {
@@ -22,27 +22,70 @@ export function directionWords(d: Direction): string {
   }
 }
 
+/** How close, in words. "far" and "unknown" say nothing rather than guess. */
+export function proximityWords(p: Proximity): string {
+  switch (p) {
+    case "close":
+      return "close by";
+    case "near":
+      return "nearby";
+    default:
+      return "";
+  }
+}
+
+const OBSTACLE_WORDS: Record<ObstacleKind, string> = {
+  person: "Person",
+  chair: "Chair",
+  table: "Table",
+  door: "Door",
+  pole: "Pole",
+  stairs: "Stairs",
+  vehicle: "Vehicle",
+  bicycle: "Bicycle",
+  obstacle: "Something", // the detector was sure there is an obstacle but not what it is
+};
+
+export function obstacleWords(k: ObstacleKind): string {
+  return OBSTACLE_WORDS[k] ?? "Something";
+}
+
+/** "Person on your left, close by." — joins the parts we actually have. */
+function sentence(subject: string, d: Direction, p: Proximity): string {
+  const parts = [directionWords(d), proximityWords(p)].filter(Boolean);
+  return `${subject}${parts.length ? ` ${parts.join(", ")}` : ""}.`;
+}
+
 /** Which events should be spoken by the phone's screen reader, and how urgently. */
 export function describeEvent(e: BrimEvent): Announcement | null {
   switch (e.type) {
-    case "person_recognized": {
-      const where = directionWords(e.direction);
-      return { text: `${e.display_name} is here${where ? `, ${where}` : ""}.`, politeness: "polite", key: `person:${e.person_id}` };
-    }
     case "safety_alert":
       return {
         text: `${e.severity === "critical" ? "Warning: " : ""}${e.text}.`,
         politeness: e.severity === "info" ? "polite" : "assertive",
         key: `safety:${e.kind}:${e.text}`,
       };
+    case "clear_path":
+      // Navigation advice: said right after the warning that made it necessary, so it must not be
+      // suppressed into silence — but "Path unclear, stop" is the urgent one.
+      return {
+        text: `${e.text}.`,
+        politeness: e.clear ? "polite" : "assertive",
+        key: `path:${e.clear ? e.direction : "unclear"}`,
+      };
+    case "person_seen":
+      return { text: sentence("Person", e.direction, e.proximity), politeness: "polite", key: `person:${e.track_id}` };
+    case "obstacle_seen":
+      return {
+        text: sentence(obstacleWords(e.label), e.direction, e.proximity),
+        politeness: "polite",
+        key: `obstacle:${e.label}:${e.direction}`,
+      };
     case "fault":
       if (e.action === "restarting") return { text: "Hat is restarting its camera system.", politeness: "polite", key: "fault:restarting" };
       if (e.action === "recovered") return { text: "Hat is working again.", politeness: "polite", key: "fault:recovered" };
       if (e.action === "degraded") return { text: `Hat problem: ${e.message}.`, politeness: "assertive", key: `fault:${e.component}` };
       return null;
-    case "cue":
-      return { text: `${e.text}.`, politeness: "polite", key: `cue:${e.cue}:${e.person_id ?? e.anon_id ?? ""}` };
-    case "unknown_person": // strangers are not announced on the phone (privacy + noise)
     case "health": // far too chatty for a live region
       return null;
   }

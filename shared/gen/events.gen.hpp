@@ -13,9 +13,9 @@
 namespace brim::schema {
 
 using brim::json::Value;
-inline constexpr int kSchemaVersion = 1;
+inline constexpr int kSchemaVersion = 2;
 
-// Where the person/object is relative to the wearer's head.
+// Where something is relative to the wearer's head, or which way to move.
 enum class Direction { Left, Ahead, Right, Unknown };
 inline const char* to_string(Direction v) {
   switch (v) {
@@ -34,46 +34,68 @@ inline bool from_string(std::string_view s, Direction& out) {
   return false;
 }
 
-// Social cue detected on a nearby person.
-enum class CueKind { Waving, Smiling, Approaching, Leaving, LookingAtYou, SpeakingToYou };
-inline const char* to_string(CueKind v) {
+// How close something is, estimated from how much of the frame it fills. There is no distance sensor on the hat, so this is always an estimate from the image: `close` = act now, `near` = worth saying, `far` = ignore.
+enum class Proximity { Close, Near, Far, Unknown };
+inline const char* to_string(Proximity v) {
   switch (v) {
-    case CueKind::Waving: return "waving";
-    case CueKind::Smiling: return "smiling";
-    case CueKind::Approaching: return "approaching";
-    case CueKind::Leaving: return "leaving";
-    case CueKind::LookingAtYou: return "looking_at_you";
-    case CueKind::SpeakingToYou: return "speaking_to_you";
+    case Proximity::Close: return "close";
+    case Proximity::Near: return "near";
+    case Proximity::Far: return "far";
+    case Proximity::Unknown: return "unknown";
   }
   return "";
 }
-inline bool from_string(std::string_view s, CueKind& out) {
-  if (s == "waving") { out = CueKind::Waving; return true; }
-  if (s == "smiling") { out = CueKind::Smiling; return true; }
-  if (s == "approaching") { out = CueKind::Approaching; return true; }
-  if (s == "leaving") { out = CueKind::Leaving; return true; }
-  if (s == "looking_at_you") { out = CueKind::LookingAtYou; return true; }
-  if (s == "speaking_to_you") { out = CueKind::SpeakingToYou; return true; }
+inline bool from_string(std::string_view s, Proximity& out) {
+  if (s == "close") { out = Proximity::Close; return true; }
+  if (s == "near") { out = Proximity::Near; return true; }
+  if (s == "far") { out = Proximity::Far; return true; }
+  if (s == "unknown") { out = Proximity::Unknown; return true; }
   return false;
 }
 
-enum class SafetyKind { ObstacleHeadHeight, ObstacleAhead, StepOrCurb, FastApproach, Vehicle };
+// What the obstacle is. `obstacle` means 'something is there' — used when the detector is confident that an obstacle exists but not confident about the label (we never name what we did not see with confidence).
+enum class ObstacleKind { Person, Chair, Table, Door, Pole, Stairs, Vehicle, Bicycle, Obstacle };
+inline const char* to_string(ObstacleKind v) {
+  switch (v) {
+    case ObstacleKind::Person: return "person";
+    case ObstacleKind::Chair: return "chair";
+    case ObstacleKind::Table: return "table";
+    case ObstacleKind::Door: return "door";
+    case ObstacleKind::Pole: return "pole";
+    case ObstacleKind::Stairs: return "stairs";
+    case ObstacleKind::Vehicle: return "vehicle";
+    case ObstacleKind::Bicycle: return "bicycle";
+    case ObstacleKind::Obstacle: return "obstacle";
+  }
+  return "";
+}
+inline bool from_string(std::string_view s, ObstacleKind& out) {
+  if (s == "person") { out = ObstacleKind::Person; return true; }
+  if (s == "chair") { out = ObstacleKind::Chair; return true; }
+  if (s == "table") { out = ObstacleKind::Table; return true; }
+  if (s == "door") { out = ObstacleKind::Door; return true; }
+  if (s == "pole") { out = ObstacleKind::Pole; return true; }
+  if (s == "stairs") { out = ObstacleKind::Stairs; return true; }
+  if (s == "vehicle") { out = ObstacleKind::Vehicle; return true; }
+  if (s == "bicycle") { out = ObstacleKind::Bicycle; return true; }
+  if (s == "obstacle") { out = ObstacleKind::Obstacle; return true; }
+  return false;
+}
+
+// The three things that interrupt everything else. All are judged from the camera image.
+enum class SafetyKind { PersonClose, ObjectClose, PhoneRaised };
 inline const char* to_string(SafetyKind v) {
   switch (v) {
-    case SafetyKind::ObstacleHeadHeight: return "obstacle_head_height";
-    case SafetyKind::ObstacleAhead: return "obstacle_ahead";
-    case SafetyKind::StepOrCurb: return "step_or_curb";
-    case SafetyKind::FastApproach: return "fast_approach";
-    case SafetyKind::Vehicle: return "vehicle";
+    case SafetyKind::PersonClose: return "person_close";
+    case SafetyKind::ObjectClose: return "object_close";
+    case SafetyKind::PhoneRaised: return "phone_raised";
   }
   return "";
 }
 inline bool from_string(std::string_view s, SafetyKind& out) {
-  if (s == "obstacle_head_height") { out = SafetyKind::ObstacleHeadHeight; return true; }
-  if (s == "obstacle_ahead") { out = SafetyKind::ObstacleAhead; return true; }
-  if (s == "step_or_curb") { out = SafetyKind::StepOrCurb; return true; }
-  if (s == "fast_approach") { out = SafetyKind::FastApproach; return true; }
-  if (s == "vehicle") { out = SafetyKind::Vehicle; return true; }
+  if (s == "person_close") { out = SafetyKind::PersonClose; return true; }
+  if (s == "object_close") { out = SafetyKind::ObjectClose; return true; }
+  if (s == "phone_raised") { out = SafetyKind::PhoneRaised; return true; }
   return false;
 }
 
@@ -130,34 +152,32 @@ inline bool from_string(std::string_view s, ComponentState& out) {
   return false;
 }
 
-// Commands app_server sends to brim.
-enum class CommandKind { ForgetPerson, ReloadPeople, ReloadSettings };
+// Commands app_server sends to brim. `reload_settings` carries the new settings; `speak_pairing_pin` carries the PIN so the wearer hears it in the earpiece.
+enum class CommandKind { ReloadSettings, SpeakPairingPin };
 inline const char* to_string(CommandKind v) {
   switch (v) {
-    case CommandKind::ForgetPerson: return "forget_person";
-    case CommandKind::ReloadPeople: return "reload_people";
     case CommandKind::ReloadSettings: return "reload_settings";
+    case CommandKind::SpeakPairingPin: return "speak_pairing_pin";
   }
   return "";
 }
 inline bool from_string(std::string_view s, CommandKind& out) {
-  if (s == "forget_person") { out = CommandKind::ForgetPerson; return true; }
-  if (s == "reload_people") { out = CommandKind::ReloadPeople; return true; }
   if (s == "reload_settings") { out = CommandKind::ReloadSettings; return true; }
+  if (s == "speak_pairing_pin") { out = CommandKind::SpeakPairingPin; return true; }
   return false;
 }
 
-enum class ActivityKind { Recognized, Stranger };
+enum class ActivityKind { Person, Obstacle };
 inline const char* to_string(ActivityKind v) {
   switch (v) {
-    case ActivityKind::Recognized: return "recognized";
-    case ActivityKind::Stranger: return "stranger";
+    case ActivityKind::Person: return "person";
+    case ActivityKind::Obstacle: return "obstacle";
   }
   return "";
 }
 inline bool from_string(std::string_view s, ActivityKind& out) {
-  if (s == "recognized") { out = ActivityKind::Recognized; return true; }
-  if (s == "stranger") { out = ActivityKind::Stranger; return true; }
+  if (s == "person") { out = ActivityKind::Person; return true; }
+  if (s == "obstacle") { out = ActivityKind::Obstacle; return true; }
   return false;
 }
 
@@ -211,18 +231,16 @@ inline bool fail(std::string* err, const char* type, const char* field) {
 }  // namespace detail
 
 struct ComponentStatus;
-struct PersonRecognizedEvent;
-struct UnknownPersonEvent;
-struct CueEvent;
+struct PersonSeenEvent;
+struct ObstacleSeenEvent;
+struct ClearPathEvent;
 struct SafetyAlertEvent;
 struct FaultEvent;
 struct HealthEvent;
+struct Settings;
 struct Command;
-struct Person;
-struct PersonPatch;
 struct ActivityItem;
 struct Alert;
-struct Settings;
 struct HealthResponse;
 struct PairRequest;
 struct PairResponse;
@@ -230,30 +248,26 @@ struct ApiError;
 
 inline Value to_json(const ComponentStatus& v);
 inline bool from_json(const Value& j, ComponentStatus& out, std::string* err = nullptr);
-inline Value to_json(const PersonRecognizedEvent& v);
-inline bool from_json(const Value& j, PersonRecognizedEvent& out, std::string* err = nullptr);
-inline Value to_json(const UnknownPersonEvent& v);
-inline bool from_json(const Value& j, UnknownPersonEvent& out, std::string* err = nullptr);
-inline Value to_json(const CueEvent& v);
-inline bool from_json(const Value& j, CueEvent& out, std::string* err = nullptr);
+inline Value to_json(const PersonSeenEvent& v);
+inline bool from_json(const Value& j, PersonSeenEvent& out, std::string* err = nullptr);
+inline Value to_json(const ObstacleSeenEvent& v);
+inline bool from_json(const Value& j, ObstacleSeenEvent& out, std::string* err = nullptr);
+inline Value to_json(const ClearPathEvent& v);
+inline bool from_json(const Value& j, ClearPathEvent& out, std::string* err = nullptr);
 inline Value to_json(const SafetyAlertEvent& v);
 inline bool from_json(const Value& j, SafetyAlertEvent& out, std::string* err = nullptr);
 inline Value to_json(const FaultEvent& v);
 inline bool from_json(const Value& j, FaultEvent& out, std::string* err = nullptr);
 inline Value to_json(const HealthEvent& v);
 inline bool from_json(const Value& j, HealthEvent& out, std::string* err = nullptr);
+inline Value to_json(const Settings& v);
+inline bool from_json(const Value& j, Settings& out, std::string* err = nullptr);
 inline Value to_json(const Command& v);
 inline bool from_json(const Value& j, Command& out, std::string* err = nullptr);
-inline Value to_json(const Person& v);
-inline bool from_json(const Value& j, Person& out, std::string* err = nullptr);
-inline Value to_json(const PersonPatch& v);
-inline bool from_json(const Value& j, PersonPatch& out, std::string* err = nullptr);
 inline Value to_json(const ActivityItem& v);
 inline bool from_json(const Value& j, ActivityItem& out, std::string* err = nullptr);
 inline Value to_json(const Alert& v);
 inline bool from_json(const Value& j, Alert& out, std::string* err = nullptr);
-inline Value to_json(const Settings& v);
-inline bool from_json(const Value& j, Settings& out, std::string* err = nullptr);
 inline Value to_json(const HealthResponse& v);
 inline bool from_json(const Value& j, HealthResponse& out, std::string* err = nullptr);
 inline Value to_json(const PairRequest& v);
@@ -269,45 +283,52 @@ struct ComponentStatus {
   std::optional<std::string> detail;
 };
 
-// An enrolled person was recognized. Spoken as '<name> is here'.
-struct PersonRecognizedEvent {
-  static constexpr const char* kType = "person_recognized";
+// Someone is in view. Anonymous: a track_id only, never a name or face data. Spoken as 'person on your left, close by'.
+struct PersonSeenEvent {
+  static constexpr const char* kType = "person_seen";
   std::int64_t seq = 0;  // Per-source counter; gaps mean dropped events.
   std::string source;
   std::int64_t t_mono_ms = 0;  // Device CLOCK_MONOTONIC ms when emitted.
   std::optional<std::int64_t> t_capture_mono_ms;  // Monotonic ms of the camera frame this came from.
   std::optional<std::int64_t> t_relay_mono_ms;  // Stamped by app_server when relayed to the phone.
-  std::int64_t person_id = 0;
-  std::string display_name;
+  std::int64_t track_id = 0;  // Stable while this person stays in view; forgotten within 30 minutes. Not an identity.
+  Direction direction{};
+  Proximity proximity{};
   double confidence = 0;
-  Direction direction{};
+  std::optional<double> area_frac;  // Fraction of the frame the box fills — the evidence behind `proximity`.
 };
 
-// A face that matches nobody enrolled. anon_id is stable for at most 30 minutes, then forgotten.
-struct UnknownPersonEvent {
-  static constexpr const char* kType = "unknown_person";
+// A non-person obstacle is in view. Spoken as 'chair ahead'. `label` is only set to something specific when the detector is confident.
+struct ObstacleSeenEvent {
+  static constexpr const char* kType = "obstacle_seen";
   std::int64_t seq = 0;
   std::string source;
   std::int64_t t_mono_ms = 0;
   std::optional<std::int64_t> t_capture_mono_ms;
   std::optional<std::int64_t> t_relay_mono_ms;
-  std::string anon_id;
+  std::optional<std::int64_t> track_id;
+  ObstacleKind label{};
   Direction direction{};
+  Proximity proximity{};
+  double confidence = 0;
+  std::optional<double> area_frac;
 };
 
-struct CueEvent {
-  static constexpr const char* kType = "cue";
+// Where it is safe to move. `clear` false means no direction is safe and the wearer is told 'Path unclear, stop' — never guess a direction.
+struct ClearPathEvent {
+  static constexpr const char* kType = "clear_path";
   std::int64_t seq = 0;
   std::string source;
   std::int64_t t_mono_ms = 0;
   std::optional<std::int64_t> t_capture_mono_ms;
   std::optional<std::int64_t> t_relay_mono_ms;
-  CueKind cue{};
-  std::string text;  // Short phrase to speak/show, e.g. 'Sam is waving'.
-  std::optional<std::int64_t> person_id;
-  std::optional<std::string> anon_id;
+  bool clear = false;  // True only when `direction` is a direction we are sure about.
+  Direction direction{};
+  std::string text;  // Exactly what was spoken, e.g. 'Clear path ahead' or 'Path unclear, stop'.
+  std::optional<std::vector<Direction>> blocked;  // Directions ruled out this decision.
 };
 
+// Highest speech priority: something close in front, or a phone held up toward the wearer.
 struct SafetyAlertEvent {
   static constexpr const char* kType = "safety_alert";
   std::int64_t seq = 0;
@@ -318,8 +339,9 @@ struct SafetyAlertEvent {
   SafetyKind kind{};
   Severity severity{};
   std::string text;
-  std::optional<double> distance_m;
   Direction direction{};
+  std::optional<Proximity> proximity;
+  std::optional<double> confidence;
 };
 
 struct FaultEvent {
@@ -351,34 +373,33 @@ struct HealthEvent {
   std::vector<ComponentStatus> components;
 };
 
+struct Settings {
+  std::int64_t volume = 0;
+  double speech_rate = 0;
+  bool announce_people = false;  // Say where people are. Safety alerts about people are always spoken.
+  bool announce_obstacles = false;  // Name obstacles and their side.
+  Sensitivity safety_sensitivity{};
+  std::int64_t info_min_interval_s = 0;  // Minimum seconds between low-priority announcements (people, obstacles). Safety and navigation are never delayed by this.
+};
+
 // app_server -> brim control message (never leaves the device).
 struct Command {
   static constexpr const char* kType = "command";
   std::int64_t t_mono_ms = 0;
   CommandKind command{};
-  std::optional<std::int64_t> person_id;
+  std::optional<Settings> settings;  // Set on reload_settings: brim applies these without reading SQLite.
+  std::optional<std::string> pin;  // Set on speak_pairing_pin: the 6-digit pairing PIN to speak in the earpiece.
 };
 
-struct Person {
-  std::int64_t id = 0;
-  std::string display_name;
-  std::string enrolled_at;
-  std::optional<std::string> last_seen_at;
-  bool has_name_clip = false;
-  bool has_embedding = false;
-};
-
-struct PersonPatch {
-  std::string display_name;
-};
-
+// One thing the hat noticed. No identity: people are anonymous. Purged 30 minutes after it was seen.
 struct ActivityItem {
   std::int64_t id = 0;
   ActivityKind kind{};
-  std::optional<std::int64_t> person_id;
-  std::optional<std::string> display_name;
-  std::optional<std::string> anon_id;
+  std::optional<ObstacleKind> label;  // Set when kind is obstacle.
+  std::optional<std::int64_t> track_id;
   Direction direction{};
+  Proximity proximity{};
+  std::optional<double> confidence;
   std::string seen_at;
 };
 
@@ -388,15 +409,6 @@ struct Alert {
   Severity severity{};
   std::string text;
   std::string created_at;
-};
-
-struct Settings {
-  std::int64_t volume = 0;
-  double speech_rate = 0;
-  bool cues_enabled = false;
-  bool announce_strangers = false;
-  Sensitivity safety_sensitivity{};
-  std::int64_t cue_min_interval_s = 0;
 };
 
 struct HealthResponse {
@@ -438,86 +450,96 @@ inline bool from_json(const Value& j, ComponentStatus& out, std::string* err) {
   return true;
 }
 
-inline Value to_json(const PersonRecognizedEvent& v) {
+inline Value to_json(const PersonSeenEvent& v) {
   Value o = Value::object();
-  o.set("type", Value("person_recognized"));
+  o.set("type", Value("person_seen"));
   o.set("seq", detail::enc(v.seq));
   o.set("source", detail::enc(v.source));
   o.set("t_mono_ms", detail::enc(v.t_mono_ms));
   if (v.t_capture_mono_ms) o.set("t_capture_mono_ms", detail::enc(*v.t_capture_mono_ms));
   if (v.t_relay_mono_ms) o.set("t_relay_mono_ms", detail::enc(*v.t_relay_mono_ms));
-  o.set("person_id", detail::enc(v.person_id));
-  o.set("display_name", detail::enc(v.display_name));
+  o.set("track_id", detail::enc(v.track_id));
+  o.set("direction", detail::enc(v.direction));
+  o.set("proximity", detail::enc(v.proximity));
   o.set("confidence", detail::enc(v.confidence));
-  o.set("direction", detail::enc(v.direction));
+  if (v.area_frac) o.set("area_frac", detail::enc(*v.area_frac));
   return o;
 }
-inline bool from_json(const Value& j, PersonRecognizedEvent& out, std::string* err) {
-  if (!j.is_object()) { if (err) *err = "PersonRecognizedEvent: not an object"; return false; }
-  { const Value* x = j.find("type"); if (!x || !x->is_string() || x->as_string() != "person_recognized") return detail::fail(err, "PersonRecognizedEvent", "type"); }
-  { const Value* x = j.find("seq"); if (!x || !detail::dec(*x, out.seq)) return detail::fail(err, "PersonRecognizedEvent", "seq"); }
-  { const Value* x = j.find("source"); if (!x || !detail::dec(*x, out.source)) return detail::fail(err, "PersonRecognizedEvent", "source"); }
-  { const Value* x = j.find("t_mono_ms"); if (!x || !detail::dec(*x, out.t_mono_ms)) return detail::fail(err, "PersonRecognizedEvent", "t_mono_ms"); }
-  { const Value* x = j.find("t_capture_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "PersonRecognizedEvent", "t_capture_mono_ms"); out.t_capture_mono_ms = std::move(t); } else { out.t_capture_mono_ms.reset(); } }
-  { const Value* x = j.find("t_relay_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "PersonRecognizedEvent", "t_relay_mono_ms"); out.t_relay_mono_ms = std::move(t); } else { out.t_relay_mono_ms.reset(); } }
-  { const Value* x = j.find("person_id"); if (!x || !detail::dec(*x, out.person_id)) return detail::fail(err, "PersonRecognizedEvent", "person_id"); }
-  { const Value* x = j.find("display_name"); if (!x || !detail::dec(*x, out.display_name)) return detail::fail(err, "PersonRecognizedEvent", "display_name"); }
-  { const Value* x = j.find("confidence"); if (!x || !detail::dec(*x, out.confidence)) return detail::fail(err, "PersonRecognizedEvent", "confidence"); }
-  { const Value* x = j.find("direction"); if (!x || !detail::dec(*x, out.direction)) return detail::fail(err, "PersonRecognizedEvent", "direction"); }
+inline bool from_json(const Value& j, PersonSeenEvent& out, std::string* err) {
+  if (!j.is_object()) { if (err) *err = "PersonSeenEvent: not an object"; return false; }
+  { const Value* x = j.find("type"); if (!x || !x->is_string() || x->as_string() != "person_seen") return detail::fail(err, "PersonSeenEvent", "type"); }
+  { const Value* x = j.find("seq"); if (!x || !detail::dec(*x, out.seq)) return detail::fail(err, "PersonSeenEvent", "seq"); }
+  { const Value* x = j.find("source"); if (!x || !detail::dec(*x, out.source)) return detail::fail(err, "PersonSeenEvent", "source"); }
+  { const Value* x = j.find("t_mono_ms"); if (!x || !detail::dec(*x, out.t_mono_ms)) return detail::fail(err, "PersonSeenEvent", "t_mono_ms"); }
+  { const Value* x = j.find("t_capture_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "PersonSeenEvent", "t_capture_mono_ms"); out.t_capture_mono_ms = std::move(t); } else { out.t_capture_mono_ms.reset(); } }
+  { const Value* x = j.find("t_relay_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "PersonSeenEvent", "t_relay_mono_ms"); out.t_relay_mono_ms = std::move(t); } else { out.t_relay_mono_ms.reset(); } }
+  { const Value* x = j.find("track_id"); if (!x || !detail::dec(*x, out.track_id)) return detail::fail(err, "PersonSeenEvent", "track_id"); }
+  { const Value* x = j.find("direction"); if (!x || !detail::dec(*x, out.direction)) return detail::fail(err, "PersonSeenEvent", "direction"); }
+  { const Value* x = j.find("proximity"); if (!x || !detail::dec(*x, out.proximity)) return detail::fail(err, "PersonSeenEvent", "proximity"); }
+  { const Value* x = j.find("confidence"); if (!x || !detail::dec(*x, out.confidence)) return detail::fail(err, "PersonSeenEvent", "confidence"); }
+  { const Value* x = j.find("area_frac"); if (x && !x->is_null()) { double t{}; if (!detail::dec(*x, t)) return detail::fail(err, "PersonSeenEvent", "area_frac"); out.area_frac = std::move(t); } else { out.area_frac.reset(); } }
   return true;
 }
 
-inline Value to_json(const UnknownPersonEvent& v) {
+inline Value to_json(const ObstacleSeenEvent& v) {
   Value o = Value::object();
-  o.set("type", Value("unknown_person"));
+  o.set("type", Value("obstacle_seen"));
   o.set("seq", detail::enc(v.seq));
   o.set("source", detail::enc(v.source));
   o.set("t_mono_ms", detail::enc(v.t_mono_ms));
   if (v.t_capture_mono_ms) o.set("t_capture_mono_ms", detail::enc(*v.t_capture_mono_ms));
   if (v.t_relay_mono_ms) o.set("t_relay_mono_ms", detail::enc(*v.t_relay_mono_ms));
-  o.set("anon_id", detail::enc(v.anon_id));
+  if (v.track_id) o.set("track_id", detail::enc(*v.track_id));
+  o.set("label", detail::enc(v.label));
   o.set("direction", detail::enc(v.direction));
+  o.set("proximity", detail::enc(v.proximity));
+  o.set("confidence", detail::enc(v.confidence));
+  if (v.area_frac) o.set("area_frac", detail::enc(*v.area_frac));
   return o;
 }
-inline bool from_json(const Value& j, UnknownPersonEvent& out, std::string* err) {
-  if (!j.is_object()) { if (err) *err = "UnknownPersonEvent: not an object"; return false; }
-  { const Value* x = j.find("type"); if (!x || !x->is_string() || x->as_string() != "unknown_person") return detail::fail(err, "UnknownPersonEvent", "type"); }
-  { const Value* x = j.find("seq"); if (!x || !detail::dec(*x, out.seq)) return detail::fail(err, "UnknownPersonEvent", "seq"); }
-  { const Value* x = j.find("source"); if (!x || !detail::dec(*x, out.source)) return detail::fail(err, "UnknownPersonEvent", "source"); }
-  { const Value* x = j.find("t_mono_ms"); if (!x || !detail::dec(*x, out.t_mono_ms)) return detail::fail(err, "UnknownPersonEvent", "t_mono_ms"); }
-  { const Value* x = j.find("t_capture_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "UnknownPersonEvent", "t_capture_mono_ms"); out.t_capture_mono_ms = std::move(t); } else { out.t_capture_mono_ms.reset(); } }
-  { const Value* x = j.find("t_relay_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "UnknownPersonEvent", "t_relay_mono_ms"); out.t_relay_mono_ms = std::move(t); } else { out.t_relay_mono_ms.reset(); } }
-  { const Value* x = j.find("anon_id"); if (!x || !detail::dec(*x, out.anon_id)) return detail::fail(err, "UnknownPersonEvent", "anon_id"); }
-  { const Value* x = j.find("direction"); if (!x || !detail::dec(*x, out.direction)) return detail::fail(err, "UnknownPersonEvent", "direction"); }
+inline bool from_json(const Value& j, ObstacleSeenEvent& out, std::string* err) {
+  if (!j.is_object()) { if (err) *err = "ObstacleSeenEvent: not an object"; return false; }
+  { const Value* x = j.find("type"); if (!x || !x->is_string() || x->as_string() != "obstacle_seen") return detail::fail(err, "ObstacleSeenEvent", "type"); }
+  { const Value* x = j.find("seq"); if (!x || !detail::dec(*x, out.seq)) return detail::fail(err, "ObstacleSeenEvent", "seq"); }
+  { const Value* x = j.find("source"); if (!x || !detail::dec(*x, out.source)) return detail::fail(err, "ObstacleSeenEvent", "source"); }
+  { const Value* x = j.find("t_mono_ms"); if (!x || !detail::dec(*x, out.t_mono_ms)) return detail::fail(err, "ObstacleSeenEvent", "t_mono_ms"); }
+  { const Value* x = j.find("t_capture_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ObstacleSeenEvent", "t_capture_mono_ms"); out.t_capture_mono_ms = std::move(t); } else { out.t_capture_mono_ms.reset(); } }
+  { const Value* x = j.find("t_relay_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ObstacleSeenEvent", "t_relay_mono_ms"); out.t_relay_mono_ms = std::move(t); } else { out.t_relay_mono_ms.reset(); } }
+  { const Value* x = j.find("track_id"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ObstacleSeenEvent", "track_id"); out.track_id = std::move(t); } else { out.track_id.reset(); } }
+  { const Value* x = j.find("label"); if (!x || !detail::dec(*x, out.label)) return detail::fail(err, "ObstacleSeenEvent", "label"); }
+  { const Value* x = j.find("direction"); if (!x || !detail::dec(*x, out.direction)) return detail::fail(err, "ObstacleSeenEvent", "direction"); }
+  { const Value* x = j.find("proximity"); if (!x || !detail::dec(*x, out.proximity)) return detail::fail(err, "ObstacleSeenEvent", "proximity"); }
+  { const Value* x = j.find("confidence"); if (!x || !detail::dec(*x, out.confidence)) return detail::fail(err, "ObstacleSeenEvent", "confidence"); }
+  { const Value* x = j.find("area_frac"); if (x && !x->is_null()) { double t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ObstacleSeenEvent", "area_frac"); out.area_frac = std::move(t); } else { out.area_frac.reset(); } }
   return true;
 }
 
-inline Value to_json(const CueEvent& v) {
+inline Value to_json(const ClearPathEvent& v) {
   Value o = Value::object();
-  o.set("type", Value("cue"));
+  o.set("type", Value("clear_path"));
   o.set("seq", detail::enc(v.seq));
   o.set("source", detail::enc(v.source));
   o.set("t_mono_ms", detail::enc(v.t_mono_ms));
   if (v.t_capture_mono_ms) o.set("t_capture_mono_ms", detail::enc(*v.t_capture_mono_ms));
   if (v.t_relay_mono_ms) o.set("t_relay_mono_ms", detail::enc(*v.t_relay_mono_ms));
-  o.set("cue", detail::enc(v.cue));
+  o.set("clear", detail::enc(v.clear));
+  o.set("direction", detail::enc(v.direction));
   o.set("text", detail::enc(v.text));
-  if (v.person_id) o.set("person_id", detail::enc(*v.person_id));
-  if (v.anon_id) o.set("anon_id", detail::enc(*v.anon_id));
+  if (v.blocked) o.set("blocked", detail::enc(*v.blocked));
   return o;
 }
-inline bool from_json(const Value& j, CueEvent& out, std::string* err) {
-  if (!j.is_object()) { if (err) *err = "CueEvent: not an object"; return false; }
-  { const Value* x = j.find("type"); if (!x || !x->is_string() || x->as_string() != "cue") return detail::fail(err, "CueEvent", "type"); }
-  { const Value* x = j.find("seq"); if (!x || !detail::dec(*x, out.seq)) return detail::fail(err, "CueEvent", "seq"); }
-  { const Value* x = j.find("source"); if (!x || !detail::dec(*x, out.source)) return detail::fail(err, "CueEvent", "source"); }
-  { const Value* x = j.find("t_mono_ms"); if (!x || !detail::dec(*x, out.t_mono_ms)) return detail::fail(err, "CueEvent", "t_mono_ms"); }
-  { const Value* x = j.find("t_capture_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "CueEvent", "t_capture_mono_ms"); out.t_capture_mono_ms = std::move(t); } else { out.t_capture_mono_ms.reset(); } }
-  { const Value* x = j.find("t_relay_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "CueEvent", "t_relay_mono_ms"); out.t_relay_mono_ms = std::move(t); } else { out.t_relay_mono_ms.reset(); } }
-  { const Value* x = j.find("cue"); if (!x || !detail::dec(*x, out.cue)) return detail::fail(err, "CueEvent", "cue"); }
-  { const Value* x = j.find("text"); if (!x || !detail::dec(*x, out.text)) return detail::fail(err, "CueEvent", "text"); }
-  { const Value* x = j.find("person_id"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "CueEvent", "person_id"); out.person_id = std::move(t); } else { out.person_id.reset(); } }
-  { const Value* x = j.find("anon_id"); if (x && !x->is_null()) { std::string t{}; if (!detail::dec(*x, t)) return detail::fail(err, "CueEvent", "anon_id"); out.anon_id = std::move(t); } else { out.anon_id.reset(); } }
+inline bool from_json(const Value& j, ClearPathEvent& out, std::string* err) {
+  if (!j.is_object()) { if (err) *err = "ClearPathEvent: not an object"; return false; }
+  { const Value* x = j.find("type"); if (!x || !x->is_string() || x->as_string() != "clear_path") return detail::fail(err, "ClearPathEvent", "type"); }
+  { const Value* x = j.find("seq"); if (!x || !detail::dec(*x, out.seq)) return detail::fail(err, "ClearPathEvent", "seq"); }
+  { const Value* x = j.find("source"); if (!x || !detail::dec(*x, out.source)) return detail::fail(err, "ClearPathEvent", "source"); }
+  { const Value* x = j.find("t_mono_ms"); if (!x || !detail::dec(*x, out.t_mono_ms)) return detail::fail(err, "ClearPathEvent", "t_mono_ms"); }
+  { const Value* x = j.find("t_capture_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ClearPathEvent", "t_capture_mono_ms"); out.t_capture_mono_ms = std::move(t); } else { out.t_capture_mono_ms.reset(); } }
+  { const Value* x = j.find("t_relay_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ClearPathEvent", "t_relay_mono_ms"); out.t_relay_mono_ms = std::move(t); } else { out.t_relay_mono_ms.reset(); } }
+  { const Value* x = j.find("clear"); if (!x || !detail::dec(*x, out.clear)) return detail::fail(err, "ClearPathEvent", "clear"); }
+  { const Value* x = j.find("direction"); if (!x || !detail::dec(*x, out.direction)) return detail::fail(err, "ClearPathEvent", "direction"); }
+  { const Value* x = j.find("text"); if (!x || !detail::dec(*x, out.text)) return detail::fail(err, "ClearPathEvent", "text"); }
+  { const Value* x = j.find("blocked"); if (x && !x->is_null()) { std::vector<Direction> t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ClearPathEvent", "blocked"); out.blocked = std::move(t); } else { out.blocked.reset(); } }
   return true;
 }
 
@@ -532,8 +554,9 @@ inline Value to_json(const SafetyAlertEvent& v) {
   o.set("kind", detail::enc(v.kind));
   o.set("severity", detail::enc(v.severity));
   o.set("text", detail::enc(v.text));
-  if (v.distance_m) o.set("distance_m", detail::enc(*v.distance_m));
   o.set("direction", detail::enc(v.direction));
+  if (v.proximity) o.set("proximity", detail::enc(*v.proximity));
+  if (v.confidence) o.set("confidence", detail::enc(*v.confidence));
   return o;
 }
 inline bool from_json(const Value& j, SafetyAlertEvent& out, std::string* err) {
@@ -547,8 +570,9 @@ inline bool from_json(const Value& j, SafetyAlertEvent& out, std::string* err) {
   { const Value* x = j.find("kind"); if (!x || !detail::dec(*x, out.kind)) return detail::fail(err, "SafetyAlertEvent", "kind"); }
   { const Value* x = j.find("severity"); if (!x || !detail::dec(*x, out.severity)) return detail::fail(err, "SafetyAlertEvent", "severity"); }
   { const Value* x = j.find("text"); if (!x || !detail::dec(*x, out.text)) return detail::fail(err, "SafetyAlertEvent", "text"); }
-  { const Value* x = j.find("distance_m"); if (x && !x->is_null()) { double t{}; if (!detail::dec(*x, t)) return detail::fail(err, "SafetyAlertEvent", "distance_m"); out.distance_m = std::move(t); } else { out.distance_m.reset(); } }
   { const Value* x = j.find("direction"); if (!x || !detail::dec(*x, out.direction)) return detail::fail(err, "SafetyAlertEvent", "direction"); }
+  { const Value* x = j.find("proximity"); if (x && !x->is_null()) { Proximity t{}; if (!detail::dec(*x, t)) return detail::fail(err, "SafetyAlertEvent", "proximity"); out.proximity = std::move(t); } else { out.proximity.reset(); } }
+  { const Value* x = j.find("confidence"); if (x && !x->is_null()) { double t{}; if (!detail::dec(*x, t)) return detail::fail(err, "SafetyAlertEvent", "confidence"); out.confidence = std::move(t); } else { out.confidence.reset(); } }
   return true;
 }
 
@@ -614,12 +638,34 @@ inline bool from_json(const Value& j, HealthEvent& out, std::string* err) {
   return true;
 }
 
+inline Value to_json(const Settings& v) {
+  Value o = Value::object();
+  o.set("volume", detail::enc(v.volume));
+  o.set("speech_rate", detail::enc(v.speech_rate));
+  o.set("announce_people", detail::enc(v.announce_people));
+  o.set("announce_obstacles", detail::enc(v.announce_obstacles));
+  o.set("safety_sensitivity", detail::enc(v.safety_sensitivity));
+  o.set("info_min_interval_s", detail::enc(v.info_min_interval_s));
+  return o;
+}
+inline bool from_json(const Value& j, Settings& out, std::string* err) {
+  if (!j.is_object()) { if (err) *err = "Settings: not an object"; return false; }
+  { const Value* x = j.find("volume"); if (!x || !detail::dec(*x, out.volume)) return detail::fail(err, "Settings", "volume"); }
+  { const Value* x = j.find("speech_rate"); if (!x || !detail::dec(*x, out.speech_rate)) return detail::fail(err, "Settings", "speech_rate"); }
+  { const Value* x = j.find("announce_people"); if (!x || !detail::dec(*x, out.announce_people)) return detail::fail(err, "Settings", "announce_people"); }
+  { const Value* x = j.find("announce_obstacles"); if (!x || !detail::dec(*x, out.announce_obstacles)) return detail::fail(err, "Settings", "announce_obstacles"); }
+  { const Value* x = j.find("safety_sensitivity"); if (!x || !detail::dec(*x, out.safety_sensitivity)) return detail::fail(err, "Settings", "safety_sensitivity"); }
+  { const Value* x = j.find("info_min_interval_s"); if (!x || !detail::dec(*x, out.info_min_interval_s)) return detail::fail(err, "Settings", "info_min_interval_s"); }
+  return true;
+}
+
 inline Value to_json(const Command& v) {
   Value o = Value::object();
   o.set("type", Value("command"));
   o.set("t_mono_ms", detail::enc(v.t_mono_ms));
   o.set("command", detail::enc(v.command));
-  if (v.person_id) o.set("person_id", detail::enc(*v.person_id));
+  if (v.settings) o.set("settings", detail::enc(*v.settings));
+  if (v.pin) o.set("pin", detail::enc(*v.pin));
   return o;
 }
 inline bool from_json(const Value& j, Command& out, std::string* err) {
@@ -627,39 +673,8 @@ inline bool from_json(const Value& j, Command& out, std::string* err) {
   { const Value* x = j.find("type"); if (!x || !x->is_string() || x->as_string() != "command") return detail::fail(err, "Command", "type"); }
   { const Value* x = j.find("t_mono_ms"); if (!x || !detail::dec(*x, out.t_mono_ms)) return detail::fail(err, "Command", "t_mono_ms"); }
   { const Value* x = j.find("command"); if (!x || !detail::dec(*x, out.command)) return detail::fail(err, "Command", "command"); }
-  { const Value* x = j.find("person_id"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "Command", "person_id"); out.person_id = std::move(t); } else { out.person_id.reset(); } }
-  return true;
-}
-
-inline Value to_json(const Person& v) {
-  Value o = Value::object();
-  o.set("id", detail::enc(v.id));
-  o.set("display_name", detail::enc(v.display_name));
-  o.set("enrolled_at", detail::enc(v.enrolled_at));
-  if (v.last_seen_at) o.set("last_seen_at", detail::enc(*v.last_seen_at));
-  o.set("has_name_clip", detail::enc(v.has_name_clip));
-  o.set("has_embedding", detail::enc(v.has_embedding));
-  return o;
-}
-inline bool from_json(const Value& j, Person& out, std::string* err) {
-  if (!j.is_object()) { if (err) *err = "Person: not an object"; return false; }
-  { const Value* x = j.find("id"); if (!x || !detail::dec(*x, out.id)) return detail::fail(err, "Person", "id"); }
-  { const Value* x = j.find("display_name"); if (!x || !detail::dec(*x, out.display_name)) return detail::fail(err, "Person", "display_name"); }
-  { const Value* x = j.find("enrolled_at"); if (!x || !detail::dec(*x, out.enrolled_at)) return detail::fail(err, "Person", "enrolled_at"); }
-  { const Value* x = j.find("last_seen_at"); if (x && !x->is_null()) { std::string t{}; if (!detail::dec(*x, t)) return detail::fail(err, "Person", "last_seen_at"); out.last_seen_at = std::move(t); } else { out.last_seen_at.reset(); } }
-  { const Value* x = j.find("has_name_clip"); if (!x || !detail::dec(*x, out.has_name_clip)) return detail::fail(err, "Person", "has_name_clip"); }
-  { const Value* x = j.find("has_embedding"); if (!x || !detail::dec(*x, out.has_embedding)) return detail::fail(err, "Person", "has_embedding"); }
-  return true;
-}
-
-inline Value to_json(const PersonPatch& v) {
-  Value o = Value::object();
-  o.set("display_name", detail::enc(v.display_name));
-  return o;
-}
-inline bool from_json(const Value& j, PersonPatch& out, std::string* err) {
-  if (!j.is_object()) { if (err) *err = "PersonPatch: not an object"; return false; }
-  { const Value* x = j.find("display_name"); if (!x || !detail::dec(*x, out.display_name)) return detail::fail(err, "PersonPatch", "display_name"); }
+  { const Value* x = j.find("settings"); if (x && !x->is_null()) { Settings t{}; if (!detail::dec(*x, t)) return detail::fail(err, "Command", "settings"); out.settings = std::move(t); } else { out.settings.reset(); } }
+  { const Value* x = j.find("pin"); if (x && !x->is_null()) { std::string t{}; if (!detail::dec(*x, t)) return detail::fail(err, "Command", "pin"); out.pin = std::move(t); } else { out.pin.reset(); } }
   return true;
 }
 
@@ -667,10 +682,11 @@ inline Value to_json(const ActivityItem& v) {
   Value o = Value::object();
   o.set("id", detail::enc(v.id));
   o.set("kind", detail::enc(v.kind));
-  if (v.person_id) o.set("person_id", detail::enc(*v.person_id));
-  if (v.display_name) o.set("display_name", detail::enc(*v.display_name));
-  if (v.anon_id) o.set("anon_id", detail::enc(*v.anon_id));
+  if (v.label) o.set("label", detail::enc(*v.label));
+  if (v.track_id) o.set("track_id", detail::enc(*v.track_id));
   o.set("direction", detail::enc(v.direction));
+  o.set("proximity", detail::enc(v.proximity));
+  if (v.confidence) o.set("confidence", detail::enc(*v.confidence));
   o.set("seen_at", detail::enc(v.seen_at));
   return o;
 }
@@ -678,10 +694,11 @@ inline bool from_json(const Value& j, ActivityItem& out, std::string* err) {
   if (!j.is_object()) { if (err) *err = "ActivityItem: not an object"; return false; }
   { const Value* x = j.find("id"); if (!x || !detail::dec(*x, out.id)) return detail::fail(err, "ActivityItem", "id"); }
   { const Value* x = j.find("kind"); if (!x || !detail::dec(*x, out.kind)) return detail::fail(err, "ActivityItem", "kind"); }
-  { const Value* x = j.find("person_id"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ActivityItem", "person_id"); out.person_id = std::move(t); } else { out.person_id.reset(); } }
-  { const Value* x = j.find("display_name"); if (x && !x->is_null()) { std::string t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ActivityItem", "display_name"); out.display_name = std::move(t); } else { out.display_name.reset(); } }
-  { const Value* x = j.find("anon_id"); if (x && !x->is_null()) { std::string t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ActivityItem", "anon_id"); out.anon_id = std::move(t); } else { out.anon_id.reset(); } }
+  { const Value* x = j.find("label"); if (x && !x->is_null()) { ObstacleKind t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ActivityItem", "label"); out.label = std::move(t); } else { out.label.reset(); } }
+  { const Value* x = j.find("track_id"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ActivityItem", "track_id"); out.track_id = std::move(t); } else { out.track_id.reset(); } }
   { const Value* x = j.find("direction"); if (!x || !detail::dec(*x, out.direction)) return detail::fail(err, "ActivityItem", "direction"); }
+  { const Value* x = j.find("proximity"); if (!x || !detail::dec(*x, out.proximity)) return detail::fail(err, "ActivityItem", "proximity"); }
+  { const Value* x = j.find("confidence"); if (x && !x->is_null()) { double t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ActivityItem", "confidence"); out.confidence = std::move(t); } else { out.confidence.reset(); } }
   { const Value* x = j.find("seen_at"); if (!x || !detail::dec(*x, out.seen_at)) return detail::fail(err, "ActivityItem", "seen_at"); }
   return true;
 }
@@ -702,27 +719,6 @@ inline bool from_json(const Value& j, Alert& out, std::string* err) {
   { const Value* x = j.find("severity"); if (!x || !detail::dec(*x, out.severity)) return detail::fail(err, "Alert", "severity"); }
   { const Value* x = j.find("text"); if (!x || !detail::dec(*x, out.text)) return detail::fail(err, "Alert", "text"); }
   { const Value* x = j.find("created_at"); if (!x || !detail::dec(*x, out.created_at)) return detail::fail(err, "Alert", "created_at"); }
-  return true;
-}
-
-inline Value to_json(const Settings& v) {
-  Value o = Value::object();
-  o.set("volume", detail::enc(v.volume));
-  o.set("speech_rate", detail::enc(v.speech_rate));
-  o.set("cues_enabled", detail::enc(v.cues_enabled));
-  o.set("announce_strangers", detail::enc(v.announce_strangers));
-  o.set("safety_sensitivity", detail::enc(v.safety_sensitivity));
-  o.set("cue_min_interval_s", detail::enc(v.cue_min_interval_s));
-  return o;
-}
-inline bool from_json(const Value& j, Settings& out, std::string* err) {
-  if (!j.is_object()) { if (err) *err = "Settings: not an object"; return false; }
-  { const Value* x = j.find("volume"); if (!x || !detail::dec(*x, out.volume)) return detail::fail(err, "Settings", "volume"); }
-  { const Value* x = j.find("speech_rate"); if (!x || !detail::dec(*x, out.speech_rate)) return detail::fail(err, "Settings", "speech_rate"); }
-  { const Value* x = j.find("cues_enabled"); if (!x || !detail::dec(*x, out.cues_enabled)) return detail::fail(err, "Settings", "cues_enabled"); }
-  { const Value* x = j.find("announce_strangers"); if (!x || !detail::dec(*x, out.announce_strangers)) return detail::fail(err, "Settings", "announce_strangers"); }
-  { const Value* x = j.find("safety_sensitivity"); if (!x || !detail::dec(*x, out.safety_sensitivity)) return detail::fail(err, "Settings", "safety_sensitivity"); }
-  { const Value* x = j.find("cue_min_interval_s"); if (!x || !detail::dec(*x, out.cue_min_interval_s)) return detail::fail(err, "Settings", "cue_min_interval_s"); }
   return true;
 }
 
@@ -787,14 +783,14 @@ inline bool from_json(const Value& j, ApiError& out, std::string* err) {
 }
 
 // Discriminator for BrimEvent (field "type").
-enum class BrimEventType { PersonRecognized, UnknownPerson, Cue, SafetyAlert, Fault, Health };
+enum class BrimEventType { PersonSeen, ObstacleSeen, ClearPath, SafetyAlert, Fault, Health };
 inline std::optional<BrimEventType> brimEvent_type_of(const Value& j) {
   const Value* t = j.find("type");
   if (!t || !t->is_string()) return std::nullopt;
   const std::string& s = t->as_string();
-  if (s == "person_recognized") return BrimEventType::PersonRecognized;
-  if (s == "unknown_person") return BrimEventType::UnknownPerson;
-  if (s == "cue") return BrimEventType::Cue;
+  if (s == "person_seen") return BrimEventType::PersonSeen;
+  if (s == "obstacle_seen") return BrimEventType::ObstacleSeen;
+  if (s == "clear_path") return BrimEventType::ClearPath;
   if (s == "safety_alert") return BrimEventType::SafetyAlert;
   if (s == "fault") return BrimEventType::Fault;
   if (s == "health") return BrimEventType::Health;

@@ -40,8 +40,8 @@ jobs:
       - name: Configure + build (host preset, UDS IPC)
         working-directory: device
         run: cmake --preset host && cmake --build --preset host -j
-      - name: Unit tests (schema, SQLite layer, speak queue, privacy, API)
+      - name: Unit tests (schema, detection, privacy, speak queue, SQLite layer, API)
         working-directory: device
         run: ctest --preset host
-      - name: End-to-end smoke test (pairing, REST, WebSocket, supervisor restart, forget)
+      - name: End-to-end smoke test (pairing, spoken PIN, REST, WebSocket, supervisor restart, settings)
         run: scripts/smoke_test.sh

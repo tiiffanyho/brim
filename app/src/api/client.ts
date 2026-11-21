@@ -1,15 +1,6 @@
 // Typed REST client for app_server. All types come from shared/events.schema.json via @schema.
 // The session is an HttpOnly cookie set by POST /api/pair; JS never sees the token.
-import type {
-  ActivityItem,
-  Alert,
-  ApiError as ApiErrorBody,
-  HealthResponse,
-  PairResponse,
-  Person,
-  PersonPatch,
-  Settings,
-} from "@schema";
+import type { ActivityItem, Alert, ApiError as ApiErrorBody, HealthResponse, PairResponse, Settings } from "@schema";
 
 // TODO(qnx-check): if the QNX libwebsockets build lacks PUT/PATCH/DELETE (see
 // device/src/app_server/app_server_main.cpp), set this to true: those calls are then sent as
@@ -62,13 +53,10 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
   return json as T;
 }
 
+// There is no people endpoint: the hat does not recognize faces, so there is nobody to list.
 export const api = {
   pair: (pin: string) => request<PairResponse>("POST", "/pair", { pin }),
   health: () => request<HealthResponse>("GET", "/health"),
-  people: () => request<Person[]>("GET", "/people"),
-  renamePerson: (id: number, display_name: string) =>
-    request<Person>("PATCH", `/people/${id}`, { display_name } satisfies PersonPatch),
-  forgetPerson: (id: number) => request<void>("DELETE", `/people/${id}`),
   activity: (limit = 50) => request<ActivityItem[]>("GET", `/activity?limit=${limit}`),
   alerts: (limit = 50) => request<Alert[]>("GET", `/alerts?limit=${limit}`),
   settings: () => request<Settings>("GET", "/settings"),

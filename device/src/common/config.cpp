@@ -11,25 +11,42 @@ std::string config_dir() {
   return env && *env ? env : "config";
 }
 
-CueThresholds load_cues(const std::string& path) {
-  CueThresholds c;
+SafetyThresholds load_safety(const std::string& path) {
+  SafetyThresholds c;
   std::string err;
   auto j = json::parse_file(path, &err);
   if (!j || !j->is_object()) {
-    BRIM_LOGW("config", "using default cue thresholds (%s)", err.c_str());
+    BRIM_LOGW("config", "using default safety thresholds (%s)", err.c_str());
     return c;
   }
-  c.recognize_min_confidence = j->get_number("recognize_min_confidence", c.recognize_min_confidence);
-  c.unknown_max_confidence = j->get_number("unknown_max_confidence", c.unknown_max_confidence);
-  c.name_repeat_s = j->get_int("name_repeat_s", c.name_repeat_s);
-  c.cue_min_interval_s = j->get_int("cue_min_interval_s", c.cue_min_interval_s);
-  c.cue_max_age_ms = j->get_int("cue_max_age_ms", c.cue_max_age_ms);
-  c.stranger_forget_s = j->get_int("stranger_forget_s", c.stranger_forget_s);
-  c.safety_head_height_m = j->get_number("safety_head_height_m", c.safety_head_height_m);
-  c.safety_fast_approach_mps = j->get_number("safety_fast_approach_mps", c.safety_fast_approach_mps);
-  // Privacy/spec floor: never allow configuration to make cues chattier than 1 per 10 s.
-  if (c.cue_min_interval_s < 10) c.cue_min_interval_s = 10;
-  if (c.stranger_forget_s > 1800) c.stranger_forget_s = 1800;
+  c.person_close_area_frac = j->get_number("person_close_area_frac", c.person_close_area_frac);
+  c.object_close_area_frac = j->get_number("object_close_area_frac", c.object_close_area_frac);
+  c.near_area_frac = j->get_number("near_area_frac", c.near_area_frac);
+  c.min_confidence = j->get_number("min_confidence", c.min_confidence);
+  c.phone_min_confidence = j->get_number("phone_min_confidence", c.phone_min_confidence);
+  c.repeat_suppress_s = j->get_int("repeat_suppress_s", c.repeat_suppress_s);
+  c.track_forget_s = j->get_int("track_forget_s", c.track_forget_s);
+  c.info_min_interval_s = j->get_int("info_min_interval_s", c.info_min_interval_s);
+  c.info_max_age_ms = j->get_int("info_max_age_ms", c.info_max_age_ms);
+  // Spec floors: never let configuration make the hat chattier than one low-priority announcement
+  // per 10 s, and never let it keep track data longer than 30 minutes.
+  if (c.info_min_interval_s < 10) c.info_min_interval_s = 10;
+  if (c.track_forget_s > 1800) c.track_forget_s = 1800;
+  return c;
+}
+
+NavThresholds load_nav(const std::string& path) {
+  NavThresholds c;
+  std::string err;
+  auto j = json::parse_file(path, &err);
+  if (!j || !j->is_object()) {
+    BRIM_LOGW("config", "using default navigation thresholds (%s)", err.c_str());
+    return c;
+  }
+  c.side_margin_frac = j->get_number("side_margin_frac", c.side_margin_frac);
+  c.clear_min_width_frac = j->get_number("clear_min_width_frac", c.clear_min_width_frac);
+  c.clear_max_area_frac = j->get_number("clear_max_area_frac", c.clear_max_area_frac);
+  c.decision_hold_ms = j->get_int("decision_hold_ms", c.decision_hold_ms);
   return c;
 }
 
@@ -50,6 +67,17 @@ AppConfig load_app(const std::string& path) {
   a.health_period_ms = static_cast<int>(j->get_int("health_period_ms", a.health_period_ms));
   a.heartbeat_period_ms = static_cast<int>(j->get_int("heartbeat_period_ms", a.heartbeat_period_ms));
   return a;
+}
+
+schema::Settings default_settings() {
+  schema::Settings s;
+  s.volume = 80;
+  s.speech_rate = 1.0;
+  s.announce_people = true;
+  s.announce_obstacles = true;
+  s.safety_sensitivity = schema::Sensitivity::Normal;
+  s.info_min_interval_s = 10;
+  return s;
 }
 
 }  // namespace brim::config

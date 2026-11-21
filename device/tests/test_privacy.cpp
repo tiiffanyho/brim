@@ -1,59 +1,117 @@
-// Privacy rules in the recognition layer: strangers are anonymous and forgotten after 30 minutes,
-// "forget" removes an enrolled person immediately, names are not repeated every frame.
-#include "cues/cue_engine.hpp"
+// Privacy rules, enforced in code so they cannot be lost by accident:
+//   * nobody is identified — a person is a box with a throw-away track id;
+//   * a track id says "the same person as a moment ago" and nothing more: once a track is
+//     forgotten, the same person coming back is a brand new, unrelated id;
+//   * every track is cleared within 30 minutes;
+//   * the event schema itself has no identity fields at all.
+#include <fstream>
+#include <sstream>
+#include <string>
+
+#include "common/config.hpp"
+#include "common/json.hpp"
+#include "detect/detector.hpp"
+#include "events.gen.hpp"
 #include "mini_test.hpp"
-#include "recognize/recognizer.hpp"
 
 using namespace brim;
-using recognize::Embedding;
+using brim::detect::Box;
+using brim::detect::Detection;
+using brim::detect::Thing;
 
-static Embedding unit(int axis) {
-  Embedding e{};
-  e[axis] = 1.0f;
-  return e;
+static Detection det(Thing t, float x, float y, float w = 0.1f, float h = 0.3f, float score = 0.9f) {
+  Detection d;
+  d.thing = t;
+  d.box = Box{x, y, w, h};
+  d.score = score;
+  return d;
 }
 
-TEST_CASE("stranger keeps the same anon id while seen, forgotten after 30 min") {
-  recognize::StrangerTracker t(30 * 60 * 1000);
-  auto a = t.observe(unit(0), 0);
-  CHECK_EQ(t.observe(unit(0), 60 * 1000), a);          // same face a minute later
-  CHECK(t.observe(unit(1), 60 * 1000) != a);           // different face -> different id
-  CHECK_EQ(t.size(), 2u);
-  t.expire(60 * 1000 + 30 * 60 * 1000);                // 30 min after last sighting
-  CHECK_EQ(t.size(), 0u);
-  auto again = t.observe(unit(0), 2 * 60 * 60 * 1000);
-  CHECK(again != a);                                   // no memory of the earlier stranger
+TEST_CASE("a person keeps one track id while in view, and a second person gets another") {
+  detect::TrackStore tracks;
+  std::vector<Detection> f1{det(Thing::Person, 0.10f, 0.2f)};
+  tracks.observe(f1, 0);
+  const int id = f1[0].track_id;
+  CHECK(id > 0);
+
+  std::vector<Detection> f2{det(Thing::Person, 0.12f, 0.2f), det(Thing::Person, 0.70f, 0.2f)};
+  tracks.observe(f2, 100);
+  CHECK_EQ(f2[0].track_id, id);        // drifted a little: same person
+  CHECK(f2[1].track_id != id);         // someone else entirely
+  CHECK_EQ(tracks.size(), 2u);
 }
 
-TEST_CASE("stranger ids never contain a name") {
-  recognize::StrangerTracker t;
-  CHECK_EQ(t.observe(unit(3), 0).rfind("stranger-", 0), 0u);
+TEST_CASE("tracks are cleared after 30 minutes and the person is not recognized again") {
+  detect::TrackStore tracks(30 * 60 * 1000);
+  std::vector<Detection> f1{det(Thing::Person, 0.10f, 0.2f)};
+  tracks.observe(f1, 0);
+  const int id = f1[0].track_id;
+
+  tracks.expire(29 * 60 * 1000);
+  CHECK_EQ(tracks.size(), 1u);
+  tracks.expire(30 * 60 * 1000);
+  CHECK_EQ(tracks.size(), 0u);
+
+  std::vector<Detection> later{det(Thing::Person, 0.10f, 0.2f)};  // the very same person, hours later
+  tracks.observe(later, 3 * 60 * 60 * 1000);
+  CHECK(later[0].track_id != id);  // no memory of them: a new, meaningless id
 }
 
-TEST_CASE("gallery: match, rename, forget") {
-  recognize::Gallery g;
-  g.add(1, "Sam", unit(0));
-  g.add(2, "Priya", unit(1));
-  auto m = g.best_match(unit(0), 0.8f);
-  REQUIRE(m.has_value());
-  CHECK_EQ(m->person_id, 1);
-  CHECK_EQ(m->display_name, "Sam");
-  CHECK(!g.best_match(unit(5), 0.8f).has_value());     // unknown face -> no name
-  g.rename(1, "Samuel");
-  CHECK_EQ(g.best_match(unit(0), 0.8f)->display_name, "Samuel");
-  CHECK(g.forget(1));
-  CHECK(!g.best_match(unit(0), 0.8f).has_value());
-  CHECK_EQ(g.size(), 1u);
+TEST_CASE("clear() forgets everything immediately") {
+  detect::TrackStore tracks;
+  std::vector<Detection> f{det(Thing::Person, 0.1f, 0.2f), det(Thing::Chair, 0.5f, 0.5f)};
+  tracks.observe(f, 0);
+  CHECK_EQ(tracks.size(), 2u);
+  tracks.clear();
+  CHECK_EQ(tracks.size(), 0u);
 }
 
-TEST_CASE("name announcer: once per repeat window") {
-  cues::NameAnnouncer n(120000);
-  CHECK(n.should_announce(1, 0));
-  CHECK(!n.should_announce(1, 1000));
-  CHECK(n.should_announce(2, 1000));
-  CHECK(n.should_announce(1, 121000));
-  n.forget(2);
-  CHECK(n.should_announce(2, 2000));
+TEST_CASE("the same track is announced at most once per suppression window") {
+  detect::TrackStore tracks(30 * 60 * 1000, 10000);
+  std::vector<Detection> f{det(Thing::Person, 0.1f, 0.2f)};
+  tracks.observe(f, 0);
+  const int id = f[0].track_id;
+  CHECK(tracks.should_announce(id, 0));
+  CHECK(!tracks.should_announce(id, 5000));
+  CHECK(tracks.should_announce(id, 10000));
+  CHECK(!tracks.should_announce(999, 10000));  // unknown track: never announced
+}
+
+TEST_CASE("person events carry no identity") {
+  schema::PersonSeenEvent e;
+  e.seq = 1;
+  e.source = "brim";
+  e.t_mono_ms = 1;
+  e.track_id = 4;
+  e.direction = schema::Direction::Left;
+  e.proximity = schema::Proximity::Close;
+  e.confidence = 0.9;
+  auto j = schema::to_json(e);
+  for (const char* forbidden : {"display_name", "person_id", "name", "anon_id", "embedding"})
+    CHECK(j.find(forbidden) == nullptr);
+  CHECK_EQ(j.get_int("track_id"), 4);
+}
+
+TEST_CASE("the event schema has no identity fields") {
+  std::ifstream f(std::string(BRIM_REPO_ROOT) + "/shared/events.schema.json");
+  REQUIRE(f.good());
+  std::stringstream ss;
+  ss << f.rdbuf();
+  const std::string schema = ss.str();
+  // Quoted so that prose in the descriptions ("no face data") does not trip this.
+  for (const char* forbidden : {"\"display_name\"", "\"person_id\"", "\"embedding", "\"anon_id\"", "\"name_clip", "\"cue\""}) {
+    if (schema.find(forbidden) != std::string::npos) std::printf("  schema still mentions %s\n", forbidden);
+    CHECK(schema.find(forbidden) == std::string::npos);
+  }
+}
+
+TEST_CASE("config floors: never chattier than 1 info per 10 s, never keep tracks past 30 min") {
+  auto c = config::load_safety(std::string(BRIM_REPO_ROOT) + "/config/safety.json");
+  CHECK(c.info_min_interval_s >= 10);
+  CHECK(c.track_forget_s <= 1800);
+  auto missing = config::load_safety("/nonexistent/safety.json");  // defaults must also be safe
+  CHECK(missing.info_min_interval_s >= 10);
+  CHECK(missing.track_forget_s <= 1800);
 }
 
 MINI_TEST_MAIN()

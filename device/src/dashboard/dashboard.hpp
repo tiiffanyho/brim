@@ -1,4 +1,6 @@
-// The hat's "dashboard": what a sighted helper sees during setup (pairing PIN, IP, status).
+// The "dashboard": the HDMI monitor used for the demo (pairing PIN, IP, status). There is no
+// display on the hat itself — the wearer hears the pairing PIN in the earpiece, because app_server
+// sends brim a speak_pairing_pin command when it creates the PIN.
 #pragma once
 
 #include <memory>
@@ -15,8 +17,8 @@ class Dashboard {
 
 // Prints to the log and writes <run_dir>/pairing.txt.
 std::unique_ptr<Dashboard> make_log_dashboard(const std::string& run_dir);
-// TODO(hw): small display on the hat (e.g. SPI OLED) or the Pi's HDMI via QNX Screen
-//   (libscreen). TODO(qnx-check): confirm which display stack the Pi 5 QNX image provides.
-//   Could also speak the PIN through the earpiece for a blind user pairing on their own.
+// TODO(hw): draw the demo dashboard on the HDMI monitor via QNX Screen (libscreen).
+//   TODO(qnx-check): confirm which display stack the Pi 5 QNX image provides (ls /dev/screen, and
+//   whether the BSP starts the `screen` service).
 
 }  // namespace brim::dashboard

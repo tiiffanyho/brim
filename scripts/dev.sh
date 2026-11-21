@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Laptop dev loop — no hardware needed.
 #   1. regenerate schema types   2. build + unit-test device code (host preset)
-#   3. app_server (REST/WS/SQLite, demo people)   4. supervisor -> brim --fake
+#   3. app_server (REST/WS/SQLite)   4. supervisor -> brim --fake
 #   5. Vite dev server for the PWA (proxies /api and /ws to app_server)
-# Open the printed URL, enter the printed PIN, and watch "Sam is here", alerts and health arrive.
+# Open the printed URL, enter the printed PIN (brim also "speaks" it — look for SAY in this log),
+# and watch safety warnings, directions, people, obstacles and health arrive.
 #
 # Env: BRIM_PORT (app_server, default 8080)  BRIM_VITE_PORT (default 5173)
 #      BRIM_RUN_DIR (IPC sockets, default /tmp/brim-$USER)  BRIM_SKIP_TESTS=1
@@ -56,7 +57,7 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 say "starting app_server on :$PORT (data in .dev/data)"
-"$B/app_server" --port "$PORT" --data-dir "$DEV/data" --migrations data/migrations --static app/dist --seed-demo &
+"$B/app_server" --port "$PORT" --data-dir "$DEV/data" --migrations data/migrations --static app/dist &
 PIDS+=($!)
 for _ in $(seq 50); do [[ -s $BRIM_RUN_DIR/pairing.txt ]] && break; sleep 0.1; done
 
@@ -77,7 +78,7 @@ cat <<MSG
      Brim dev is running
      Laptop:  http://localhost:$VITE_PORT
      Phone:   http://${LAN_IP:-<laptop-ip>}:$VITE_PORT   (same Wi-Fi)
-     PIN:     $PIN
+     PIN:     $PIN   (brim speaks it in the earpiece; "SAY [nav]" above)
      Demo:    kill -USR1 \$(pgrep -x brim)   -> supervisor restarts it
      Extra:   scripts/fake_events.py        -> more random events
      Ctrl-C stops everything.

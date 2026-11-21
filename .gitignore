@@ -8,6 +8,8 @@ app/dist/
 *.db-wal
 *.db-shm
 .DS_Store
+# editor / IDE settings (machine-specific paths)
+.vscode/
 # generated audio and models are large / device-specific
 audio/*.wav
 models/*.tflite

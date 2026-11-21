@@ -56,9 +56,7 @@ message(STATUS "Brim IPC backend: ${BRIM_IPC_BACKEND}")
 # ---------------------------------------------------------------- pipeline modules
 add_library(brim_pipeline STATIC
   src/capture/camera.cpp
-  src/faces/face_detector.cpp
-  src/recognize/recognizer.cpp
-  src/cues/cue_engine.cpp
+  src/detect/detector.cpp
   src/safety/safety_monitor.cpp
   src/audio/speak_queue.cpp
   src/audio/audio_out.cpp
@@ -130,6 +128,7 @@ if(BRIM_BUILD_TESTS)
   brim_test(test_schema brim_common)
   brim_test(test_speak_queue brim_pipeline)
   brim_test(test_privacy brim_pipeline)
+  brim_test(test_detect brim_pipeline)
   if(BRIM_BUILD_APP_SERVER)
     brim_test(test_db brim_db)
     brim_test(test_api brim_api)

@@ -5,15 +5,14 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <cctype>
-#include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
 #include <sstream>
 
+#include "common/config.hpp"
 #include "common/json.hpp"
 #include "common/log.hpp"
 
@@ -71,45 +70,6 @@ std::string read_file(const std::string& path) {
   std::stringstream ss;
   ss << f.rdbuf();
   return ss.str();
-}
-
-constexpr const char* kPersonCols = "id, display_name, name_clip_path, embedding_path, enrolled_at, last_seen_at";
-
-s::Person person_from(Stmt& q) {
-  s::Person p;
-  p.id = q.i64(0);
-  p.display_name = q.text(1);
-  p.has_name_clip = !q.is_null(2) && !q.text(2).empty();
-  p.has_embedding = !q.is_null(3) && !q.text(3).empty();
-  p.enrolled_at = q.text(4);
-  if (!q.is_null(5)) p.last_seen_at = q.text(5);
-  return p;
-}
-
-// Deletes data_dir/rel only if it resolves inside data_dir. Missing file = success.
-bool remove_inside(const std::string& data_dir, const std::string& rel, std::string* err) {
-  if (rel.empty()) return true;
-  if (rel[0] == '/' || rel.find("..") != std::string::npos) {
-    if (err) *err = "refusing to delete path outside data dir: " + rel;
-    return false;
-  }
-  std::string full = data_dir + "/" + rel;
-  char real_dir[PATH_MAX], real_file[PATH_MAX];
-  if (!realpath(data_dir.c_str(), real_dir)) {
-    if (err) *err = "data dir missing: " + data_dir;
-    return false;
-  }
-  if (!realpath(full.c_str(), real_file)) return errno == ENOENT;  // already gone
-  std::string d(real_dir), f(real_file);
-  if (f.compare(0, d.size() + 1, d + "/") != 0) {
-    if (err) *err = "refusing to delete path outside data dir: " + f;
-    return false;
-  }
-  if (::unlink(real_file) != 0 && errno != ENOENT) {
-    if (err) *err = "unlink " + f + ": " + std::strerror(errno);
-    return false;
-  }
-  return true;
 }
 
 }  // namespace
@@ -187,87 +147,27 @@ bool Db::migrate(const std::string& dir, std::string* err) {
   return true;
 }
 
-std::vector<s::Person> Db::list_people() {
+void Db::record_person_seen(std::int64_t track_id, const std::string& direction, const std::string& proximity,
+                            double confidence, std::int64_t t_mono_ms, std::int64_t now_ms) {
   std::lock_guard<std::recursive_mutex> lk(mu_);
-  std::vector<s::Person> out;
-  std::string sql = std::string("SELECT ") + kPersonCols + " FROM people ORDER BY display_name COLLATE NOCASE";
-  Stmt q(db_, sql.c_str());
-  while (q.step_row()) out.push_back(person_from(q));
-  return out;
-}
-
-std::optional<s::Person> Db::get_person_locked(std::int64_t id) {
-  std::string sql = std::string("SELECT ") + kPersonCols + " FROM people WHERE id = ?";
-  Stmt q(db_, sql.c_str());
-  q.bind(1, id);
-  if (!q.step_row()) return std::nullopt;
-  return person_from(q);
-}
-
-std::optional<s::Person> Db::get_person(std::int64_t id) {
-  std::lock_guard<std::recursive_mutex> lk(mu_);
-  return get_person_locked(id);
-}
-
-std::int64_t Db::add_person(const std::string& name, const std::string& clip, const std::string& emb, std::int64_t now_ms) {
-  std::lock_guard<std::recursive_mutex> lk(mu_);
-  Stmt q(db_, "INSERT INTO people (display_name, name_clip_path, embedding_path, enrolled_at) VALUES (?, ?, ?, ?)");
-  q.bind(1, name);
-  if (clip.empty()) q.bind_null(2); else q.bind(2, clip);
-  if (emb.empty()) q.bind_null(3); else q.bind(3, emb);
-  q.bind(4, iso8601(now_ms));
-  if (!q.run()) return -1;
-  return sqlite3_last_insert_rowid(db_);
-}
-
-std::optional<s::Person> Db::rename_person(std::int64_t id, const std::string& name) {
-  std::lock_guard<std::recursive_mutex> lk(mu_);
-  Stmt q(db_, "UPDATE people SET display_name = ? WHERE id = ?");
-  q.bind(1, name).bind(2, id);
-  if (!q.run() || sqlite3_changes(db_) == 0) return std::nullopt;
-  return get_person_locked(id);
-}
-
-Db::DeleteResult Db::delete_person(std::int64_t id, const std::string& data_dir, std::string* err) {
-  std::lock_guard<std::recursive_mutex> lk(mu_);
-  std::string clip, emb;
-  {
-    Stmt q(db_, "SELECT name_clip_path, embedding_path FROM people WHERE id = ?");
-    q.bind(1, id);
-    if (!q.step_row()) return DeleteResult::NotFound;
-    clip = q.text(0);
-    emb = q.text(1);
-  }
-  // Files first: if we can't delete the fingerprint, we must not report the person as forgotten.
-  if (!remove_inside(data_dir, emb, err) || !remove_inside(data_dir, clip, err)) return DeleteResult::FileError;
-  Stmt d(db_, "DELETE FROM people WHERE id = ?");  // sightings cascade
-  d.bind(1, id);
-  if (!d.run()) {
-    if (err) *err = sqlite3_errmsg(db_);
-    return DeleteResult::FileError;
-  }
-  return DeleteResult::Deleted;
-}
-
-void Db::record_recognized(std::int64_t person_id, const std::string& direction, double confidence, std::int64_t t_mono_ms,
-                           std::int64_t now_ms) {
-  std::lock_guard<std::recursive_mutex> lk(mu_);
-  std::string at = iso8601(now_ms);
   Stmt q(db_,
-         "INSERT INTO sightings (kind, person_id, direction, confidence, seen_at, seen_epoch_ms, t_mono_ms) "
-         "SELECT 'recognized', id, ?, ?, ?, ?, ? FROM people WHERE id = ?");
-  q.bind(1, direction).bind(2, confidence).bind(3, at).bind(4, now_ms).bind(5, t_mono_ms).bind(6, person_id);
+         "INSERT INTO sightings (kind, label, track_id, direction, proximity, confidence, seen_at, seen_epoch_ms, t_mono_ms) "
+         "VALUES ('person', NULL, ?, ?, ?, ?, ?, ?, ?)");
+  q.bind(1, track_id).bind(2, direction).bind(3, proximity).bind(4, confidence);
+  q.bind(5, iso8601(now_ms)).bind(6, now_ms).bind(7, t_mono_ms);
   q.run();
-  Stmt u(db_, "UPDATE people SET last_seen_at = ? WHERE id = ?");
-  u.bind(1, at).bind(2, person_id);
-  u.run();
 }
 
-void Db::record_stranger(const std::string& anon_id, const std::string& direction, std::int64_t t_mono_ms, std::int64_t now_ms) {
+void Db::record_obstacle_seen(const std::string& label, std::int64_t track_id, const std::string& direction,
+                              const std::string& proximity, double confidence, std::int64_t t_mono_ms, std::int64_t now_ms) {
   std::lock_guard<std::recursive_mutex> lk(mu_);
   Stmt q(db_,
-         "INSERT INTO sightings (kind, anon_id, direction, seen_at, seen_epoch_ms, t_mono_ms) VALUES ('stranger', ?, ?, ?, ?, ?)");
-  q.bind(1, anon_id).bind(2, direction).bind(3, iso8601(now_ms)).bind(4, now_ms).bind(5, t_mono_ms);
+         "INSERT INTO sightings (kind, label, track_id, direction, proximity, confidence, seen_at, seen_epoch_ms, t_mono_ms) "
+         "VALUES ('obstacle', ?, ?, ?, ?, ?, ?, ?, ?)");
+  q.bind(1, label);
+  if (track_id > 0) q.bind(2, track_id); else q.bind_null(2);
+  q.bind(3, direction).bind(4, proximity).bind(5, confidence);
+  q.bind(6, iso8601(now_ms)).bind(7, now_ms).bind(8, t_mono_ms);
   q.run();
 }
 
@@ -275,18 +175,22 @@ std::vector<s::ActivityItem> Db::activity(int limit) {
   std::lock_guard<std::recursive_mutex> lk(mu_);
   std::vector<s::ActivityItem> out;
   Stmt q(db_,
-         "SELECT s.id, s.kind, s.person_id, p.display_name, s.anon_id, s.direction, s.seen_at "
-         "FROM sightings s LEFT JOIN people p ON p.id = s.person_id ORDER BY s.seen_epoch_ms DESC, s.id DESC LIMIT ?");
+         "SELECT id, kind, label, track_id, direction, proximity, confidence, seen_at "
+         "FROM sightings ORDER BY seen_epoch_ms DESC, id DESC LIMIT ?");
   q.bind(1, static_cast<std::int64_t>(limit));
   while (q.step_row()) {
     s::ActivityItem a;
     a.id = q.i64(0);
-    s::from_string(q.text(1), a.kind);
-    if (!q.is_null(2)) a.person_id = q.i64(2);
-    if (!q.is_null(3)) a.display_name = q.text(3);
-    if (!q.is_null(4)) a.anon_id = q.text(4);
-    if (!s::from_string(q.text(5), a.direction)) a.direction = s::Direction::Unknown;
-    a.seen_at = q.text(6);
+    if (!s::from_string(q.text(1), a.kind)) continue;
+    if (!q.is_null(2)) {
+      s::ObstacleKind k;
+      if (s::from_string(q.text(2), k)) a.label = k;
+    }
+    if (!q.is_null(3)) a.track_id = q.i64(3);
+    if (!s::from_string(q.text(4), a.direction)) a.direction = s::Direction::Unknown;
+    if (!s::from_string(q.text(5), a.proximity)) a.proximity = s::Proximity::Unknown;
+    if (!q.is_null(6)) a.confidence = q.dbl(6);
+    a.seen_at = q.text(7);
     out.push_back(std::move(a));
   }
   return out;
@@ -318,7 +222,7 @@ std::vector<s::Alert> Db::alerts(int limit) {
   return out;
 }
 
-s::Settings Db::default_settings() { return s::Settings{80, 1.0, true, false, s::Sensitivity::Normal, 10}; }
+s::Settings Db::default_settings() { return config::default_settings(); }
 
 s::Settings Db::get_settings() {
   std::lock_guard<std::recursive_mutex> lk(mu_);
@@ -367,14 +271,8 @@ int Db::purge(std::int64_t now_ms, Retention r) {
   std::lock_guard<std::recursive_mutex> lk(mu_);
   int n = 0;
   {
-    Stmt q(db_, "DELETE FROM sightings WHERE kind = 'stranger' AND seen_epoch_ms <= ?");
-    q.bind(1, now_ms - r.stranger_ms);
-    q.run();
-    n += sqlite3_changes(db_);
-  }
-  {
-    Stmt q(db_, "DELETE FROM sightings WHERE kind = 'recognized' AND seen_epoch_ms <= ?");
-    q.bind(1, now_ms - r.recognized_ms);
+    Stmt q(db_, "DELETE FROM sightings WHERE seen_epoch_ms <= ?");
+    q.bind(1, now_ms - r.sightings_ms);
     q.run();
     n += sqlite3_changes(db_);
   }
@@ -385,29 +283,6 @@ int Db::purge(std::int64_t now_ms, Retention r) {
     n += sqlite3_changes(db_);
   }
   return n;
-}
-
-void Db::seed_demo(const std::string& data_dir) {
-  std::lock_guard<std::recursive_mutex> lk(mu_);
-  {
-    Stmt q(db_, "SELECT COUNT(*) FROM people");
-    if (q.step_row() && q.i64(0) > 0) return;
-  }
-  ::mkdir(data_dir.c_str(), 0700);
-  ::mkdir((data_dir + "/clips").c_str(), 0700);
-  ::mkdir((data_dir + "/embeddings").c_str(), 0700);
-  const char* names[] = {"Sam", "Priya", "Alex"};
-  for (int i = 0; i < 3; ++i) {
-    std::string id = std::to_string(i + 1);
-    std::string clip = "clips/" + id + ".wav", emb = "embeddings/" + id + ".bin";
-    // Placeholder files so the "forget deletes files" path is real in the demo.
-    std::ofstream(data_dir + "/" + clip) << "placeholder name clip";
-    std::ofstream(data_dir + "/" + emb) << std::string(128 * 4, '\0');
-    Stmt q(db_, "INSERT INTO people (id, display_name, name_clip_path, embedding_path, enrolled_at) VALUES (?, ?, ?, ?, ?)");
-    q.bind(1, static_cast<std::int64_t>(i + 1)).bind(2, std::string(names[i])).bind(3, clip).bind(4, emb).bind(5, iso8601(now_epoch_ms()));
-    q.run();
-  }
-  BRIM_LOGI("db", "seeded demo people: Sam, Priya, Alex");
 }
 
 }  // namespace brim::app

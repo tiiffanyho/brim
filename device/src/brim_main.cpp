@@ -1,7 +1,13 @@
 // brim: the real-time pipeline process.
 //
-//   capture -> faces -> recognize -> cues / safety -> events (EventBus -> app_server)
-//                                                  \-> SpeakQueue -> audio
+//   capture -> detect (people + objects, anonymous tracks) -> safety -> navigation
+//                                      |                                  |
+//                                      +---> events (EventBus -> app_server)
+//                                      +---> SpeakQueue -> audio (earpiece)
+//
+// Speech order is safety first, then navigation, then everything else (see audio/speak_queue.hpp).
+// No identity anywhere: no face recognition, no embeddings, no names. People are boxes with a
+// throw-away track id, and tracks are cleared within 30 minutes.
 //
 // Threads:
 //   pipeline  : per-frame loop (camera paced, 15 fps). In --fake mode a scripted scenario injects
@@ -10,7 +16,7 @@
 //   health    : 1 Hz HealthEvent.
 //   heartbeat : pulses the supervisor every 200 ms *only while the pipeline loop is making
 //               progress*, so a hung pipeline gets restarted.
-//   commands  : receives app_server commands (forget_person, reload_settings).
+//   commands  : receives app_server commands (reload_settings, speak_pairing_pin).
 //
 // Flags: --fake            scripted fake events, no hardware (laptop default via scripts/dev.sh)
 //        --hang-after <s>  demo: freeze the pipeline after s seconds (supervisor must restart us)
@@ -18,6 +24,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <random>
 #include <thread>
 
@@ -29,10 +36,8 @@
 #include "common/log.hpp"
 #include "common/sysinfo.hpp"
 #include "common/timing.hpp"
-#include "cues/cue_engine.hpp"
-#include "faces/face_detector.hpp"
+#include "detect/detector.hpp"
 #include "ipc/bus.hpp"
-#include "recognize/recognizer.hpp"
 #include "safety/safety_monitor.hpp"
 
 using namespace brim;
@@ -52,19 +57,20 @@ struct Stats {
   std::atomic<std::int64_t> last_tick_ms{0};   // pipeline progress marker for the heartbeat
   std::atomic<double> fps{0};
   std::atomic<double> latency_ms{0};           // rolling avg capture -> event
+  std::atomic<std::int64_t> tracks{0};         // live anonymous tracks
   void add_latency(double ms) { latency_ms = latency_ms * 0.8 + ms * 0.2; }
 };
 
-// Shared context for the pipeline + fake scenario.
+// Shared context for the pipeline, the fake scenario and the command thread.
 struct Ctx {
   config::AppConfig app;
-  config::CueThresholds cues;
+  config::SafetyThresholds safety;
+  config::NavThresholds nav;
   bool fake = false;
   events::EventStamper stamper{"brim"};
   ipc::EventBus* bus = nullptr;
   audio::SpeakQueue* speak = nullptr;
-  recognize::Gallery* gallery = nullptr;
-  cues::NameAnnouncer* names = nullptr;
+  audio::AudioOut* audio = nullptr;
   Stats stats;
 
   template <class E>
@@ -76,99 +82,177 @@ struct Ctx {
   void say(audio::Priority p, std::string text, std::int64_t created_ms) {
     speak->push(audio::SpeechItem{p, std::move(text), "", created_ms});
   }
+
+  // The wearer's settings. Defaults until app_server sends reload_settings (it does at startup).
+  s::Settings settings() const {
+    std::lock_guard<std::mutex> lk(settings_mu_);
+    return settings_;
+  }
+  void apply_settings(const s::Settings& v) {
+    {
+      std::lock_guard<std::mutex> lk(settings_mu_);
+      settings_ = v;
+    }
+    audio::SpeakQueueConfig sq;
+    sq.info_max_age_ms = safety.info_max_age_ms;
+    sq.info_min_interval_ms = v.info_min_interval_s * 1000;
+    speak->set_config(sq);
+    if (audio) audio->apply_settings(v);
+  }
+
+ private:
+  mutable std::mutex settings_mu_;
+  s::Settings settings_ = config::default_settings();
 };
 
-// ------------------------------------------------------------------ fake scenario
-// A 40-second loop that looks like a walk through a hallway. Names match the demo people seeded
-// by `app_server --seed-demo` (ids 1..3).
-struct FakePerson { std::int64_t id; const char* name; };
-const FakePerson kSam{1, "Sam"}, kPriya{2, "Priya"}, kAlex{3, "Alex"};
+// Spoken form of a PIN: "1 2 3 4 5 6", so the earpiece reads digits, not "123,456".
+std::string spell_digits(const std::string& pin) {
+  std::string out;
+  for (char c : pin) {
+    if (c < '0' || c > '9') continue;
+    if (!out.empty()) out.push_back(' ');
+    out.push_back(c);
+  }
+  return out;
+}
 
+// ------------------------------------------------------------------ fake scenario
+// A 20-second loop that looks like a walk down a corridor: a person passes, something is close in
+// front, a chair is in the way, a phone is pointed at the wearer, and once there is no safe
+// direction at all. Every event type the app knows about shows up in the first few seconds, so the
+// demo (and scripts/smoke_test.sh) sees all of them even across a restart.
 class FakeScenario {
  public:
   explicit FakeScenario(Ctx& c) : c_(c), rng_(42) {}
 
   void tick(std::int64_t now_ms) {
     if (start_ms_ == 0) start_ms_ = now_ms;
-    std::int64_t t = (now_ms - start_ms_) / 1000 % 40;
+    const std::int64_t t = (now_ms - start_ms_) / 1000 % 20;
     if (t == last_t_) return;
     last_t_ = t;
-    std::int64_t capture_ms = now_ms - std::uniform_int_distribution<int>(25, 70)(rng_);
+    const std::int64_t cap = now_ms - std::uniform_int_distribution<int>(25, 70)(rng_);
     switch (t) {
-      case 2: recognized(kSam, s::Direction::Left, capture_ms); break;
-      case 5: cue(kSam, s::CueKind::Waving, "Sam is waving", capture_ms); break;
-      case 9: stranger(s::Direction::Ahead, capture_ms); break;
-      case 14: safety(s::SafetyKind::ObstacleHeadHeight, s::Severity::Critical, "Low branch ahead", 1.4, capture_ms); break;
-      case 19: recognized(kPriya, s::Direction::Right, capture_ms); break;
-      case 23: cue(kPriya, s::CueKind::Smiling, "Priya is smiling at you", capture_ms); break;
-      case 29: safety(s::SafetyKind::StepOrCurb, s::Severity::Warning, "Step down ahead", 2.0, capture_ms); break;
-      case 34: recognized(kAlex, s::Direction::Ahead, capture_ms); break;
-      case 37: cue(kAlex, s::CueKind::Approaching, "Alex is coming toward you", capture_ms); break;
-      default: break;
+      case 1:
+        person(s::Direction::Left, s::Proximity::Near, 0.09, cap);
+        break;
+      case 3:
+        alert(s::SafetyKind::PersonClose, s::Severity::Critical, "Person close ahead", s::Direction::Ahead, cap);
+        path(true, s::Direction::Right, "Clear path on your right, step right", {s::Direction::Ahead}, cap);
+        break;
+      case 6:
+        obstacle(s::ObstacleKind::Chair, s::Direction::Ahead, s::Proximity::Close, 0.26, cap);
+        break;
+      case 7:
+        alert(s::SafetyKind::ObjectClose, s::Severity::Warning, "Chair close ahead", s::Direction::Ahead, cap);
+        path(true, s::Direction::Left, "Chair ahead, step left", {s::Direction::Ahead, s::Direction::Right}, cap);
+        break;
+      case 10:
+        alert(s::SafetyKind::PhoneRaised, s::Severity::Warning, "A phone is pointed at you", s::Direction::Ahead, cap);
+        break;
+      case 12:
+        path(false, s::Direction::Unknown, "Path unclear, stop", {s::Direction::Left, s::Direction::Ahead, s::Direction::Right},
+             cap);
+        break;
+      case 14:
+        person(s::Direction::Right, s::Proximity::Close, 0.21, cap);
+        break;
+      case 16:
+        obstacle(s::ObstacleKind::Pole, s::Direction::Left, s::Proximity::Near, 0.08, cap);
+        break;
+      case 18:
+        path(true, s::Direction::Ahead, "Clear path ahead", {}, cap);
+        break;
+      default:
+        break;
     }
+    c_.stats.tracks = (t % 7 == 0) ? 0 : 1 + t % 3;  // plausible live-track count for Device health
   }
 
  private:
-  void recognized(const FakePerson& p, s::Direction d, std::int64_t cap) {
-    s::PersonRecognizedEvent e;
-    e.person_id = p.id;
-    e.display_name = p.name;
+  static const char* side(s::Direction d) {
+    switch (d) {
+      case s::Direction::Left: return "on your left";
+      case s::Direction::Right: return "on your right";
+      case s::Direction::Ahead: return "ahead";
+      default: return "";
+    }
+  }
+
+  void person(s::Direction d, s::Proximity p, double area, std::int64_t cap) {
+    s::PersonSeenEvent e;
+    e.track_id = ++track_;
+    e.direction = d;
+    e.proximity = p;
     e.confidence = std::uniform_real_distribution<double>(0.82, 0.98)(rng_);
+    e.area_frac = area;
+    e.t_capture_mono_ms = cap;
+    c_.emit(e, cap);
+    if (c_.settings().announce_people)
+      c_.say(audio::Priority::Info,
+             std::string("Person ") + side(d) + (p == s::Proximity::Close ? ", close by" : ""), cap);
+  }
+
+  void obstacle(s::ObstacleKind k, s::Direction d, s::Proximity p, double area, std::int64_t cap) {
+    s::ObstacleSeenEvent e;
+    e.track_id = ++track_;
+    e.label = k;
     e.direction = d;
+    e.proximity = p;
+    e.confidence = std::uniform_real_distribution<double>(0.70, 0.95)(rng_);
+    e.area_frac = area;
     e.t_capture_mono_ms = cap;
     c_.emit(e, cap);
-    if (c_.names->should_announce(p.id, e.t_mono_ms)) c_.say(audio::Priority::Name, std::string(p.name) + " is here", cap);
+    if (c_.settings().announce_obstacles)
+      c_.say(audio::Priority::Info, std::string(s::to_string(k)) + " " + side(d), cap);
   }
-  void stranger(s::Direction d, std::int64_t cap) {
-    s::UnknownPersonEvent e;
-    e.anon_id = "stranger-" + std::to_string(++stranger_n_ % 5 + 1);
-    e.direction = d;
-    e.t_capture_mono_ms = cap;
-    c_.emit(e, cap);
-  }
-  void cue(const FakePerson& p, s::CueKind k, const char* text, std::int64_t cap) {
-    s::CueEvent e;
-    e.cue = k;
-    e.text = text;
-    e.person_id = p.id;
-    e.t_capture_mono_ms = cap;
-    c_.emit(e, cap);
-    c_.say(audio::Priority::Cue, text, cap);
-  }
-  void safety(s::SafetyKind k, s::Severity sev, const char* text, double dist, std::int64_t cap) {
+
+  void alert(s::SafetyKind k, s::Severity sev, const char* text, s::Direction d, std::int64_t cap) {
     s::SafetyAlertEvent e;
     e.kind = k;
     e.severity = sev;
     e.text = text;
-    e.distance_m = dist;
-    e.direction = s::Direction::Ahead;
+    e.direction = d;
+    e.proximity = s::Proximity::Close;
+    e.confidence = std::uniform_real_distribution<double>(0.80, 0.99)(rng_);
     e.t_capture_mono_ms = cap;
     c_.emit(e, cap);
     c_.say(audio::Priority::Safety, text, cap);
+  }
+
+  void path(bool clear, s::Direction d, const char* text, std::vector<s::Direction> blocked, std::int64_t cap) {
+    s::ClearPathEvent e;
+    e.clear = clear;
+    e.direction = d;
+    e.text = text;
+    if (!blocked.empty()) e.blocked = std::move(blocked);
+    e.t_capture_mono_ms = cap;
+    c_.emit(e, cap);
+    c_.say(audio::Priority::Nav, text, cap);
   }
 
   Ctx& c_;
   std::mt19937 rng_;
   std::int64_t start_ms_ = 0;
   std::int64_t last_t_ = -1;
-  int stranger_n_ = 0;
+  std::int64_t track_ = 0;
 };
 
-// Fake VAD: "someone is talking" for 3 s out of every 15 s, to exercise the cue silence gate.
+// Fake VAD: "someone is talking" for 3 s out of every 15 s, to exercise the info silence gate.
 class FakeVad final : public audio::VoiceActivity {
  public:
   bool someone_talking() override { return (timing::mono_ms() / 1000) % 15 < 3; }
 };
 
 // ------------------------------------------------------------------ threads
-void pipeline_loop(Ctx& c, capture::Camera& cam, faces::FaceDetector& det, recognize::Embedder& emb,
-                   cues::CueEngine& cue_engine, safety::SafetyMonitor& safety_mon, std::int64_t hang_after_ms) {
+void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::SafetyMonitor& safety_mon,
+                   std::int64_t hang_after_ms) {
   FakeScenario fake(c);
-  recognize::StrangerTracker strangers(c.cues.stranger_forget_s * 1000);
+  detect::TrackStore tracks(c.safety.track_forget_s * 1000, c.safety.repeat_suppress_s * 1000);
   capture::Frame frame;
   std::int64_t start = timing::mono_ms();
   std::int64_t fps_window_start = start;
   int fps_frames = 0;
+  bool detect_was_healthy = true;
 
   while (!g_stop) {
     if (hang_after_ms > 0 && timing::mono_ms() - start > hang_after_ms) g_hang = true;
@@ -196,42 +280,80 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, faces::FaceDetector& det, recog
       continue;
     }
 
-    // Real path (models are stubs today; see TODO(ai) in each module).
-    for (auto& alert : safety_mon.check(frame)) {
+    // Real path (the models are stubs today; see TODO(ai) in each module).
+    // Cannot-fail rule: a sick detector is spoken out loud, not hidden. We never infer "clear".
+    if (!det.healthy() || !safety_mon.healthy()) {
+      if (detect_was_healthy) {
+        detect_was_healthy = false;
+        s::FaultEvent f;
+        f.component = det.healthy() ? "safety" : "detect";
+        f.action = s::FaultAction::Degraded;
+        f.message = "cannot see: obstacle warnings are not reliable";
+        c.emit(f, 0);
+        c.say(audio::Priority::Safety, "Brim cannot see. Stop and ask for help", now);
+      }
+    } else if (!detect_was_healthy) {
+      detect_was_healthy = true;
+      s::FaultEvent f;
+      f.component = "detect";
+      f.action = s::FaultAction::Recovered;
+      f.message = "detection is working again";
+      c.emit(f, 0);
+      c.say(audio::Priority::Nav, "Brim is working again", now);
+    }
+
+    auto dets = det.detect(frame);
+    tracks.observe(dets, now);
+    const auto settings = c.settings();
+
+    // 1. Safety first: anything close in front, or a phone pointed at the wearer.
+    for (auto& alert : safety_mon.check(frame, dets)) {
+      alert.t_capture_mono_ms = frame.t_capture_mono_ms;
       c.emit(alert, frame.t_capture_mono_ms);
       c.say(audio::Priority::Safety, alert.text, frame.t_capture_mono_ms);
     }
-    std::vector<cues::TrackedPerson> people;
-    for (const auto& box : det.detect(frame)) {
-      auto e = emb.embed(frame, box);
-      if (!e) continue;
-      cues::TrackedPerson tp;
-      tp.track_id = box.track_id;
-      tp.box = box;
-      if (auto m = c.gallery->best_match(*e, static_cast<float>(c.cues.recognize_min_confidence))) {
-        s::PersonRecognizedEvent ev;
-        ev.person_id = m->person_id;
-        ev.display_name = m->display_name;
-        ev.confidence = m->score;
-        ev.direction = box.x + box.w / 2 < 0.33f ? s::Direction::Left : box.x + box.w / 2 > 0.66f ? s::Direction::Right : s::Direction::Ahead;
-        ev.t_capture_mono_ms = frame.t_capture_mono_ms;
-        if (c.names->should_announce(m->person_id, now)) {
-          c.emit(ev, frame.t_capture_mono_ms);
-          c.say(audio::Priority::Name, m->display_name + " is here", frame.t_capture_mono_ms);
-        }
-        tp.person_id = m->person_id;
-        tp.display_name = m->display_name;
+
+    // 2. Navigation: the safest direction to move, or "Path unclear, stop".
+    // TODO(ai): src/nav turns `dets` + NavThresholds into a ClearPathEvent and speaks it at
+    //   Priority::Nav, right after the safety alert that made it necessary. Until it exists brim
+    //   says nothing about direction rather than guessing one (rule: never give a direction we are
+    //   not sure of).
+
+    // 3. Everything else, lowest priority, rate-limited per track.
+    for (const auto& d : dets) {
+      if (d.score < c.safety.min_confidence) continue;  // never name what we did not clearly see
+      const auto dir = detect::direction_of(d.box, c.nav.side_margin_frac);
+      const auto prox = detect::proximity_of(d.box.area(),
+                                             d.is_person() ? c.safety.person_close_area_frac : c.safety.object_close_area_frac,
+                                             c.safety.near_area_frac);
+      if (prox == s::Proximity::Far) continue;
+      if (!tracks.should_announce(d.track_id, now)) continue;
+      if (d.is_person()) {
+        if (!settings.announce_people) continue;
+        s::PersonSeenEvent e;
+        e.track_id = d.track_id;
+        e.direction = dir;
+        e.proximity = prox;
+        e.confidence = d.score;
+        e.area_frac = d.box.area();
+        e.t_capture_mono_ms = frame.t_capture_mono_ms;
+        c.emit(e, frame.t_capture_mono_ms);
       } else {
-        tp.anon_id = strangers.observe(*e, now);
+        auto kind = detect::obstacle_kind_of(d.thing);
+        if (!kind || !settings.announce_obstacles) continue;
+        s::ObstacleSeenEvent e;
+        e.track_id = d.track_id;
+        e.label = *kind;
+        e.direction = dir;
+        e.proximity = prox;
+        e.confidence = d.score;
+        e.area_frac = d.box.area();
+        e.t_capture_mono_ms = frame.t_capture_mono_ms;
+        c.emit(e, frame.t_capture_mono_ms);
       }
-      people.push_back(std::move(tp));
     }
-    for (auto& cue : cue_engine.update(frame, people)) {
-      cue.t_capture_mono_ms = frame.t_capture_mono_ms;
-      c.emit(cue, frame.t_capture_mono_ms);
-      c.say(audio::Priority::Cue, cue.text, frame.t_capture_mono_ms);
-    }
-    strangers.expire(now);
+    tracks.expire(now);
+    c.stats.tracks = static_cast<std::int64_t>(tracks.size());
   }
 }
 
@@ -246,7 +368,7 @@ void speaker_loop(Ctx& c, audio::AudioOut& out, audio::VoiceActivity& vad) {
   }
 }
 
-void health_loop(Ctx& c, const char* camera_name, const char* faces_name) {
+void health_loop(Ctx& c, const char* camera_name, const char* detector_name) {
   sysinfo::CpuMeter cpu;
   const std::int64_t start = timing::mono_ms();
   timing::PeriodicTimer timer(c.app.health_period_ms);
@@ -268,9 +390,8 @@ void health_loop(Ctx& c, const char* camera_name, const char* faces_name) {
     h.components = {
         comp("pipeline", pipeline_live ? s::ComponentState::Ok : s::ComponentState::Down, c.fake ? "fake mode" : ""),
         comp("capture", c.fake ? s::ComponentState::Stub : s::ComponentState::Ok, camera_name),
-        comp("faces", s::ComponentState::Stub, faces_name),
-        comp("recognize", s::ComponentState::Stub, std::to_string(c.gallery->size()) + " enrolled"),
-        comp("cues", s::ComponentState::Stub),
+        comp("detect", s::ComponentState::Stub,
+             std::string(detector_name) + ", " + std::to_string(c.stats.tracks.load()) + " tracks"),
         comp("safety", s::ComponentState::Stub),
         comp("audio", s::ComponentState::Stub, "log output"),
         comp("ipc", s::ComponentState::Ok, std::string(ipc::backend_name()) + ", dropped " + std::to_string(c.bus->dropped())),
@@ -304,22 +425,28 @@ void command_loop(Ctx& c) {
       continue;
     }
     switch (cmd.command) {
-      case s::CommandKind::ForgetPerson:
-        if (cmd.person_id) {
-          c.gallery->forget(*cmd.person_id);
-          c.names->forget(*cmd.person_id);
-          BRIM_LOGI("cmd", "forgot person %lld (embedding dropped from memory)", static_cast<long long>(*cmd.person_id));
-        }
-        break;
-      case s::CommandKind::ReloadPeople:
-        // TODO(ai): re-read names/embeddings for enrolled people (rename or new enrollment).
-        BRIM_LOGI("cmd", "reload_people received (gallery reload not implemented yet)");
-        break;
       case s::CommandKind::ReloadSettings:
-        // TODO: read settings (volume, speech rate, cues on/off) — app_server should include them
-        //   in the command payload or brim reads SQLite read-only. Apply to SpeakQueue/AudioOut.
-        BRIM_LOGI("cmd", "reload_settings received (not applied yet)");
+        if (!cmd.settings) {
+          BRIM_LOGW("cmd", "reload_settings without settings payload, ignored");
+          break;
+        }
+        c.apply_settings(*cmd.settings);
+        BRIM_LOGI("cmd", "reload_settings applied (volume=%lld, rate=%.2f, people=%s, obstacles=%s, info_min_interval=%llds)",
+                  static_cast<long long>(cmd.settings->volume), cmd.settings->speech_rate,
+                  cmd.settings->announce_people ? "on" : "off", cmd.settings->announce_obstacles ? "on" : "off",
+                  static_cast<long long>(cmd.settings->info_min_interval_s));
         break;
+      case s::CommandKind::SpeakPairingPin: {
+        const std::string digits = cmd.pin ? spell_digits(*cmd.pin) : "";
+        if (digits.empty()) {
+          BRIM_LOGW("cmd", "speak_pairing_pin without a PIN, ignored");
+          break;
+        }
+        // Nav priority: the wearer is waiting to hear it, but a real warning still comes first.
+        c.say(audio::Priority::Nav, "Pairing code " + digits, timing::mono_ms());
+        BRIM_LOGI("cmd", "speaking pairing code in the earpiece");
+        break;
+      }
     }
   }
 }
@@ -347,17 +474,14 @@ int main(int argc, char** argv) {
   Ctx c;
   c.fake = fake;
   c.app = config::load_app(config::config_dir() + "/app.json");
-  c.cues = config::load_cues(config::config_dir() + "/cues.json");
+  c.safety = config::load_safety(config::config_dir() + "/safety.json");
+  c.nav = config::load_nav(config::config_dir() + "/nav.json");
 
   ipc::EventBus bus(events::kAppServerChannel);
   ipc::EventBus supervisor_bus(events::kSupervisorChannel, 4);
-  audio::SpeakQueue speak({c.cues.cue_max_age_ms, c.cues.cue_min_interval_s * 1000, 32});
-  recognize::Gallery gallery;
-  cues::NameAnnouncer names(c.cues.name_repeat_s * 1000);
+  audio::SpeakQueue speak({c.safety.info_max_age_ms, c.safety.info_min_interval_s * 1000, 32});
   c.bus = &bus;
   c.speak = &speak;
-  c.gallery = &gallery;
-  c.names = &names;
 
   // Module selection: fake/stub on the laptop, real (still stubbed inside) on QNX.
 #if defined(__QNX__)
@@ -366,25 +490,25 @@ int main(int argc, char** argv) {
   const bool use_hw = false;
 #endif
   auto cam = use_hw ? capture::make_qnx_camera(c.app.capture_fps) : capture::make_fake_camera(c.app.capture_fps);
-  auto det = use_hw ? faces::make_mediapipe_face_detector(c.app.models_dir) : faces::make_stub_face_detector();
-  auto emb = use_hw ? recognize::make_tflite_embedder(c.app.models_dir) : recognize::make_stub_embedder();
-  auto cue_engine = use_hw ? cues::make_mediapipe_cue_engine(c.cues) : cues::make_stub_cue_engine();
-  auto safety_mon = use_hw ? safety::make_sensor_safety_monitor(c.cues) : safety::make_stub_safety_monitor();
+  auto det = use_hw ? detect::make_mediapipe_detector(c.app.models_dir) : detect::make_stub_detector();
+  auto safety_mon = use_hw ? safety::make_vision_safety_monitor(c.safety, c.nav) : safety::make_stub_safety_monitor();
   auto audio_out = use_hw ? audio::make_qnx_audio_out(c.app.audio_dir) : audio::make_log_audio_out();
   std::unique_ptr<audio::VoiceActivity> vad = fake ? std::unique_ptr<audio::VoiceActivity>(new FakeVad) : audio::make_stub_vad();
+  c.audio = audio_out.get();
+  c.apply_settings(config::default_settings());  // until app_server sends the stored ones
 
-  if (!cam->open() || !det->load() || !emb->load()) {
+  if (!cam->open() || !det->load()) {
     BRIM_LOGE("brim", "module init failed");  // supervisor will restart us
     return 1;
   }
 
-  BRIM_LOGI("brim", "started (mode=%s, ipc=%s, camera=%s, faces=%s)", fake ? "fake" : "real", ipc::backend_name(), cam->name(), det->name());
+  BRIM_LOGI("brim", "started (mode=%s, ipc=%s, camera=%s, detect=%s)", fake ? "fake" : "real", ipc::backend_name(), cam->name(),
+            det->name());
   c.stats.last_tick_ms = timing::mono_ms();
 
   // TODO(qnx-check): pin the pipeline thread to its own core and raise its priority
   //   (pthread_setschedparam SCHED_RR; ThreadCtl(_NTO_TCTL_RUNMASK) for affinity on QNX).
-  std::thread t_pipe(pipeline_loop, std::ref(c), std::ref(*cam), std::ref(*det), std::ref(*emb), std::ref(*cue_engine),
-                     std::ref(*safety_mon), hang_after_ms);
+  std::thread t_pipe(pipeline_loop, std::ref(c), std::ref(*cam), std::ref(*det), std::ref(*safety_mon), hang_after_ms);
   std::thread t_speak(speaker_loop, std::ref(c), std::ref(*audio_out), std::ref(*vad));
   std::thread t_health(health_loop, std::ref(c), cam->name(), det->name());
   std::thread t_hb(heartbeat_loop, std::ref(c), std::ref(supervisor_bus));

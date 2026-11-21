@@ -9,29 +9,35 @@ VOICE=${BRIM_VOICE:-Samantha}
 RATE=${BRIM_RATE:-185}
 mkdir -p audio
 
-# file_name|phrase   (stub list — extend freely; names come from enrollment, not here)
+# file_name|phrase   (stub list — extend freely. Nobody is named: there are no per-person clips.)
 PHRASES=$(cat <<'LIST'
-safety_head_height|Low obstacle, head height
-safety_obstacle_ahead|Obstacle ahead
-safety_step|Step down ahead
-safety_fast_approach|Something is coming fast
-safety_vehicle|Vehicle nearby
+safety_person_close|Person close ahead
+safety_object_close|Something close ahead
+safety_phone_raised|A phone is pointed at you
 safety_stop|Stop
-name_is_here|is here
-cue_waving|is waving
-cue_smiling|is smiling at you
-cue_approaching|is coming toward you
-cue_leaving|is leaving
-cue_looking|is looking at you
+nav_clear_ahead|Clear path ahead
+nav_step_left|Step left
+nav_step_right|Step right
+nav_path_unclear|Path unclear, stop
+info_person|Person
+info_obstacle|Something
+info_chair|Chair
+info_table|Table
+info_door|Door
+info_pole|Pole
+info_stairs|Stairs
+info_vehicle|Vehicle
+info_bicycle|Bicycle
 dir_left|on your left
 dir_right|on your right
 dir_ahead|ahead
-stranger_nearby|Someone you don't know is nearby
+prox_close|close by
+prox_near|nearby
 system_ready|Brim is ready
 system_restarting|Restarting the camera
 system_recovered|Working again
+system_cannot_see|Brim cannot see. Stop and ask for help
 system_paired|Phone paired
-system_forgot|Forgotten
 system_pin|Pairing code
 LIST
 )

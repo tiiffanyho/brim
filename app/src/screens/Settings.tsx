@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { ErrorMessage, Loading, Screen } from "./Screen";
 
 const SENSITIVITY_LABEL: Record<Sensitivity, string> = {
-  low: "Low – only urgent warnings",
+  low: "Low – only when something is very close",
   normal: "Normal",
   high: "High – warn early, more often",
 };
@@ -69,33 +69,38 @@ export function SettingsScreen() {
           </select>
 
           <div className="check">
-            <input id="cues" type="checkbox" checked={s.cues_enabled} onChange={(e) => update("cues_enabled", e.target.checked)} />
-            <label htmlFor="cues">Tell me social cues (waving, smiling, approaching)</label>
+            <input
+              id="people"
+              type="checkbox"
+              checked={s.announce_people}
+              onChange={(e) => update("announce_people", e.target.checked)}
+            />
+            <label htmlFor="people">Tell me where people are</label>
           </div>
 
           <div className="check">
             <input
-              id="strangers"
+              id="obstacles"
               type="checkbox"
-              checked={s.announce_strangers}
-              onChange={(e) => update("announce_strangers", e.target.checked)}
+              checked={s.announce_obstacles}
+              onChange={(e) => update("announce_obstacles", e.target.checked)}
             />
-            <label htmlFor="strangers">Tell me when someone I don't know is nearby</label>
+            <label htmlFor="obstacles">Name obstacles and which side they are on</label>
           </div>
 
-          <label htmlFor="interval">Minimum seconds between social cues</label>
+          <label htmlFor="interval">Minimum seconds between these announcements</label>
           <input
             id="interval"
             type="number"
             inputMode="numeric"
             min={10}
             max={600}
-            value={s.cue_min_interval_s}
+            value={s.info_min_interval_s}
             aria-describedby="interval-help"
-            onChange={(e) => update("cue_min_interval_s", Number(e.target.value))}
+            onChange={(e) => update("info_min_interval_s", Number(e.target.value))}
           />
           <p id="interval-help" className="muted">
-            At least 10. Safety warnings and names are never delayed by this.
+            At least 10. Safety warnings and directions are never delayed by this.
           </p>
 
           <fieldset>

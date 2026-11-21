@@ -33,22 +33,23 @@ json::Value to_array(const std::vector<T>& items) {
   return a;
 }
 
-std::string trim(const std::string& s) {
-  auto b = s.find_first_not_of(" \t\r\n");
-  if (b == std::string::npos) return "";
-  auto e = s.find_last_not_of(" \t\r\n");
-  return s.substr(b, e - b + 1);
-}
-
-// Counts UTF-8 code points (display names may be non-ASCII).
-std::size_t utf8_len(const std::string& s) {
-  std::size_t n = 0;
-  for (unsigned char c : s)
-    if ((c & 0xC0) != 0x80) ++n;
-  return n;
-}
-
 }  // namespace
+
+schema::Command reload_settings_command(const schema::Settings& s) {
+  schema::Command c;
+  c.t_mono_ms = timing::mono_ms();
+  c.command = schema::CommandKind::ReloadSettings;
+  c.settings = s;
+  return c;
+}
+
+schema::Command speak_pairing_pin_command(const std::string& pin) {
+  schema::Command c;
+  c.t_mono_ms = timing::mono_ms();
+  c.command = schema::CommandKind::SpeakPairingPin;
+  c.pin = pin;
+  return c;
+}
 
 int query_int(const std::string& query, const std::string& key, int def, int lo, int hi) {
   std::string k = key + "=";
@@ -79,14 +80,6 @@ HttpResponse Api::handle(const HttpRequest& req) {
   if (!authorized(req.cookie_header)) return error(401, "not paired");
 
   if (p == "/api/health" && req.method == "GET") return health();
-  if (p == "/api/people" && req.method == "GET") return json_response(200, to_array(db_.list_people()));
-  if (p.rfind("/api/people/", 0) == 0) {
-    std::string id_s = p.substr(12);
-    char* end = nullptr;
-    long long id = std::strtoll(id_s.c_str(), &end, 10);
-    if (id_s.empty() || *end != '\0' || id <= 0) return error(400, "bad person id");
-    return people_item(req, id);
-  }
   if (p == "/api/activity" && req.method == "GET")
     return json_response(200, to_array(db_.activity(query_int(req.query, "limit", 50, 1, 500))));
   if (p == "/api/alerts" && req.method == "GET")
@@ -135,49 +128,6 @@ HttpResponse Api::health() {
   return json_response(200, schema::to_json(h));
 }
 
-HttpResponse Api::people_item(const HttpRequest& req, std::int64_t id) {
-  if (req.method == "PATCH") {
-    auto j = json::parse(req.body);
-    schema::PersonPatch patch;
-    if (!j || !schema::from_json(*j, patch)) return error(400, "expected {\"display_name\": \"...\"}");
-    std::string name = trim(patch.display_name);
-    if (name.empty() || utf8_len(name) > 60) return error(400, "display_name must be 1-60 characters");
-    auto p = db_.rename_person(id, name);
-    if (!p) return error(404, "no such person");
-    schema::Command c;
-    c.t_mono_ms = timing::mono_ms();
-    c.command = schema::CommandKind::ReloadPeople;
-    c.person_id = id;
-    send_(c);
-    return json_response(200, schema::to_json(*p));
-  }
-  if (req.method == "DELETE") {
-    std::string err;
-    switch (db_.delete_person(id, data_dir_, &err)) {
-      case Db::DeleteResult::NotFound: return error(404, "no such person");
-      case Db::DeleteResult::FileError:
-        BRIM_LOGE("api", "forget person %lld failed: %s", static_cast<long long>(id), err.c_str());
-        return error(500, "could not delete this person's files; nothing was removed");
-      case Db::DeleteResult::Deleted: break;
-    }
-    schema::Command c;
-    c.t_mono_ms = timing::mono_ms();
-    c.command = schema::CommandKind::ForgetPerson;
-    c.person_id = id;
-    send_(c);
-    BRIM_LOGI("api", "forgot person %lld (fingerprint + voice clip deleted)", static_cast<long long>(id));
-    HttpResponse r;
-    r.status = 204;
-    return r;
-  }
-  if (req.method == "GET") {
-    auto p = db_.get_person(id);
-    if (!p) return error(404, "no such person");
-    return json_response(200, schema::to_json(*p));
-  }
-  return error(405, "method not allowed");
-}
-
 HttpResponse Api::settings(const HttpRequest& req) {
   if (req.method == "GET") return json_response(200, schema::to_json(db_.get_settings()));
   if (req.method != "PUT") return error(405, "method not allowed");
@@ -187,12 +137,10 @@ HttpResponse Api::settings(const HttpRequest& req) {
   if (!j || !schema::from_json(*j, s, &err)) return error(400, err.empty() ? "invalid JSON" : err);
   if (s.volume < 0 || s.volume > 100) return error(400, "volume must be 0-100");
   if (s.speech_rate < 0.5 || s.speech_rate > 2.0) return error(400, "speech_rate must be 0.5-2.0");
-  if (s.cue_min_interval_s < 10 || s.cue_min_interval_s > 600) return error(400, "cue_min_interval_s must be 10-600");
+  if (s.info_min_interval_s < 10 || s.info_min_interval_s > 600) return error(400, "info_min_interval_s must be 10-600");
   if (!db_.put_settings(s)) return error(500, "could not save settings");
-  schema::Command c;
-  c.t_mono_ms = timing::mono_ms();
-  c.command = schema::CommandKind::ReloadSettings;
-  send_(c);
+  // The settings travel with the command: brim applies them without touching SQLite.
+  send_(reload_settings_command(db_.get_settings()));
   return json_response(200, schema::to_json(db_.get_settings()));
 }
 

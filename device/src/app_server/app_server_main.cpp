@@ -6,8 +6,12 @@
 //     /*       static PWA from --static  — LWSMPRO_FILE mount (app/dist)
 //   relay thread: bus -> validate -> SQLite -> broadcast queue -> lws_cancel_service() wakes lws.
 //
+//   At startup it also tells brim two things over the command channel (retrying until brim is up):
+//   the pairing PIN, so brim speaks it in the wearer's earpiece, and the saved settings, so brim
+//   never has to read SQLite.
+//
 // usage: app_server [--port 8080] [--db data/brim.db] [--data-dir data] [--migrations data/migrations]
-//                   [--static app/dist] [--seed-demo] [--pin 123456 (dev only)]
+//                   [--static app/dist] [--pin 123456 (dev only)]
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <libwebsockets.h>
@@ -330,7 +334,6 @@ int main(int argc, char** argv) {
   int port = app_cfg.http_port;
   std::string data_dir = app_cfg.data_dir;
   std::string db_path, migrations = "data/migrations", static_dir = "app/dist", pin;
-  bool seed = false;
   for (int i = 1; i < argc; ++i) {
     auto next = [&]() -> std::string {
       if (i + 1 >= argc) {
@@ -345,12 +348,11 @@ int main(int argc, char** argv) {
     else if (a == "--data-dir") data_dir = next();
     else if (a == "--migrations") migrations = next();
     else if (a == "--static") static_dir = next();
-    else if (a == "--seed-demo") seed = true;
     else if (a == "--pin") pin = next();
     else {
       std::fprintf(stderr,
                    "usage: app_server [--port N] [--db PATH] [--data-dir DIR] [--migrations DIR] [--static DIR] "
-                   "[--seed-demo] [--pin 123456]\n");
+                   "[--pin 123456]\n");
       return 2;
     }
   }
@@ -366,15 +368,11 @@ int main(int argc, char** argv) {
     BRIM_LOGE("app_server", "database: %s", err.c_str());
     return 1;
   }
-  if (seed) db->seed_demo(data_dir);
-
   if (pin.empty()) pin = app::random_pin();
   app::Pairing pairing(pin);
   app::ServerState state;
   ipc::EventBus cmd_bus(events::kBrimCommandChannel, 32);
-  app::Api api(*db, pairing, state, data_dir, [&cmd_bus](const schema::Command& c) {
-    cmd_bus.publish(schema::to_json(c).dump());
-  });
+  app::Api api(*db, pairing, state, [&cmd_bus](const schema::Command& c) { cmd_bus.publish(schema::to_json(c).dump()); });
   g_api = &api;
   g_state = &state;
 
@@ -427,15 +425,50 @@ int main(int argc, char** argv) {
   ::mkdir(run_dir.c_str(), 0700);
   auto dash = dashboard::make_log_dashboard(run_dir);
   dash->show_pairing(pin, lan_url(port));
+  dash->show_status("The hat speaks this code in the earpiece too, so the wearer can pair alone.");
   BRIM_LOGI("app_server", "listening on :%d (lws %s), static=%s, db=%s", port, lws_get_library_version(), static_abs,
             db_path.c_str());
 
   std::thread relay([&] { app::run_relay(*db, state, broadcast_from_any_thread, g_stop); });
 
+  // Hand brim the pairing PIN (it speaks it in the earpiece) and the saved settings. brim is
+  // spawned by the supervisor in parallel with us, and a command sent to a channel nobody is
+  // listening on yet is dropped, so retry for up to 30 s until the bus confirms a delivery.
+  // After that, re-send the settings whenever the supervisor restarts brim: a fresh brim starts
+  // from the built-in defaults and must not quietly ignore what the wearer chose.
+  std::thread sync_brim([&] {
+    auto send_settings = [&] { cmd_bus.publish(schema::to_json(app::reload_settings_command(db->get_settings())).dump()); };
+    for (int attempt = 0; attempt < 30 && !g_stop; ++attempt) {
+      const std::uint64_t before = cmd_bus.sent();
+      cmd_bus.publish(schema::to_json(app::speak_pairing_pin_command(pin)).dump());
+      send_settings();
+      for (int i = 0; i < 10 && !g_stop; ++i) timing::sleep_ms(100);
+      if (cmd_bus.sent() >= before + 2) {
+        BRIM_LOGI("app_server", "brim has the pairing PIN (spoken in the earpiece) and the saved settings");
+        break;
+      }
+      if (attempt == 29 && !g_stop)
+        BRIM_LOGW("app_server", "brim never took the pairing PIN; it is on the dashboard and in %s/pairing.txt",
+                  run_dir.c_str());
+    }
+    std::int64_t seen_restarts = state.restart_count.load();
+    while (!g_stop) {
+      timing::sleep_ms(500);
+      const std::int64_t now_restarts = state.restart_count.load();
+      if (now_restarts == seen_restarts) continue;
+      seen_restarts = now_restarts;
+      timing::sleep_ms(1000);  // let the new brim bind its command channel
+      send_settings();
+      BRIM_LOGI("app_server", "re-sent the saved settings to brim after restart #%lld",
+                static_cast<long long>(now_restarts));
+    }
+  });
+
   while (!g_stop) {
     if (lws_service(g_ctx, 0) < 0) break;
   }
   g_stop = true;
+  sync_brim.join();
   relay.join();
   lws_context_destroy(g_ctx);
   g_ctx = nullptr;

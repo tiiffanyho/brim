@@ -2,22 +2,28 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://brim.local/events.schema.json",
   "title": "Brim events and API payloads",
-  "description": "Single source of truth for every event (device -> app_server -> PWA) and every REST payload. Run `node shared/gen/generate.mjs` after editing. Timestamps named t_*_mono_ms are CLOCK_MONOTONIC milliseconds on the device; *_at fields are ISO-8601 UTC wall-clock strings.",
-  "x-schema-version": 1,
+  "description": "Single source of truth for every event (device -> app_server -> PWA) and every REST payload. Run `node shared/gen/generate.mjs` after editing. Timestamps named t_*_mono_ms are CLOCK_MONOTONIC milliseconds on the device; *_at fields are ISO-8601 UTC wall-clock strings. There is no identity anywhere in this schema: no names, no face data, no person ids. People are anonymous tracks that are forgotten within 30 minutes.",
+  "x-schema-version": 2,
   "$defs": {
     "Direction": {
-      "description": "Where the person/object is relative to the wearer's head.",
+      "description": "Where something is relative to the wearer's head, or which way to move.",
       "type": "string",
       "enum": ["left", "ahead", "right", "unknown"]
     },
-    "CueKind": {
-      "description": "Social cue detected on a nearby person.",
+    "Proximity": {
+      "description": "How close something is, estimated from how much of the frame it fills. There is no distance sensor on the hat, so this is always an estimate from the image: `close` = act now, `near` = worth saying, `far` = ignore.",
       "type": "string",
-      "enum": ["waving", "smiling", "approaching", "leaving", "looking_at_you", "speaking_to_you"]
+      "enum": ["close", "near", "far", "unknown"]
+    },
+    "ObstacleKind": {
+      "description": "What the obstacle is. `obstacle` means 'something is there' — used when the detector is confident that an obstacle exists but not confident about the label (we never name what we did not see with confidence).",
+      "type": "string",
+      "enum": ["person", "chair", "table", "door", "pole", "stairs", "vehicle", "bicycle", "obstacle"]
     },
     "SafetyKind": {
+      "description": "The three things that interrupt everything else. All are judged from the camera image.",
       "type": "string",
-      "enum": ["obstacle_head_height", "obstacle_ahead", "step_or_curb", "fast_approach", "vehicle"]
+      "enum": ["person_close", "object_close", "phone_raised"]
     },
     "Severity": {
       "type": "string",
@@ -33,13 +39,13 @@
       "enum": ["ok", "degraded", "down", "stub"]
     },
     "CommandKind": {
-      "description": "Commands app_server sends to brim.",
+      "description": "Commands app_server sends to brim. `reload_settings` carries the new settings; `speak_pairing_pin` carries the PIN so the wearer hears it in the earpiece.",
       "type": "string",
-      "enum": ["forget_person", "reload_people", "reload_settings"]
+      "enum": ["reload_settings", "speak_pairing_pin"]
     },
     "ActivityKind": {
       "type": "string",
-      "enum": ["recognized", "stranger"]
+      "enum": ["person", "obstacle"]
     },
     "Sensitivity": {
       "type": "string",
@@ -56,55 +62,62 @@
       }
     },
 
-    "PersonRecognizedEvent": {
-      "description": "An enrolled person was recognized. Spoken as '<name> is here'.",
+    "PersonSeenEvent": {
+      "description": "Someone is in view. Anonymous: a track_id only, never a name or face data. Spoken as 'person on your left, close by'.",
       "type": "object",
-      "required": ["type", "seq", "source", "t_mono_ms", "person_id", "display_name", "confidence", "direction"],
+      "required": ["type", "seq", "source", "t_mono_ms", "track_id", "direction", "proximity", "confidence"],
       "properties": {
-        "type": { "const": "person_recognized" },
+        "type": { "const": "person_seen" },
         "seq": { "type": "integer", "description": "Per-source counter; gaps mean dropped events." },
         "source": { "type": "string" },
         "t_mono_ms": { "type": "integer", "description": "Device CLOCK_MONOTONIC ms when emitted." },
         "t_capture_mono_ms": { "type": "integer", "description": "Monotonic ms of the camera frame this came from." },
         "t_relay_mono_ms": { "type": "integer", "description": "Stamped by app_server when relayed to the phone." },
-        "person_id": { "type": "integer" },
-        "display_name": { "type": "string" },
+        "track_id": { "type": "integer", "description": "Stable while this person stays in view; forgotten within 30 minutes. Not an identity." },
+        "direction": { "$ref": "#/$defs/Direction" },
+        "proximity": { "$ref": "#/$defs/Proximity" },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-        "direction": { "$ref": "#/$defs/Direction" }
+        "area_frac": { "type": "number", "description": "Fraction of the frame the box fills — the evidence behind `proximity`." }
       }
     },
-    "UnknownPersonEvent": {
-      "description": "A face that matches nobody enrolled. anon_id is stable for at most 30 minutes, then forgotten.",
+    "ObstacleSeenEvent": {
+      "description": "A non-person obstacle is in view. Spoken as 'chair ahead'. `label` is only set to something specific when the detector is confident.",
       "type": "object",
-      "required": ["type", "seq", "source", "t_mono_ms", "anon_id", "direction"],
+      "required": ["type", "seq", "source", "t_mono_ms", "label", "direction", "proximity", "confidence"],
       "properties": {
-        "type": { "const": "unknown_person" },
+        "type": { "const": "obstacle_seen" },
         "seq": { "type": "integer" },
         "source": { "type": "string" },
         "t_mono_ms": { "type": "integer" },
         "t_capture_mono_ms": { "type": "integer" },
         "t_relay_mono_ms": { "type": "integer" },
-        "anon_id": { "type": "string" },
-        "direction": { "$ref": "#/$defs/Direction" }
+        "track_id": { "type": "integer" },
+        "label": { "$ref": "#/$defs/ObstacleKind" },
+        "direction": { "$ref": "#/$defs/Direction" },
+        "proximity": { "$ref": "#/$defs/Proximity" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "area_frac": { "type": "number" }
       }
     },
-    "CueEvent": {
+    "ClearPathEvent": {
+      "description": "Where it is safe to move. `clear` false means no direction is safe and the wearer is told 'Path unclear, stop' — never guess a direction.",
       "type": "object",
-      "required": ["type", "seq", "source", "t_mono_ms", "cue", "text"],
+      "required": ["type", "seq", "source", "t_mono_ms", "clear", "direction", "text"],
       "properties": {
-        "type": { "const": "cue" },
+        "type": { "const": "clear_path" },
         "seq": { "type": "integer" },
         "source": { "type": "string" },
         "t_mono_ms": { "type": "integer" },
         "t_capture_mono_ms": { "type": "integer" },
         "t_relay_mono_ms": { "type": "integer" },
-        "cue": { "$ref": "#/$defs/CueKind" },
-        "text": { "type": "string", "description": "Short phrase to speak/show, e.g. 'Sam is waving'." },
-        "person_id": { "type": "integer" },
-        "anon_id": { "type": "string" }
+        "clear": { "type": "boolean", "description": "True only when `direction` is a direction we are sure about." },
+        "direction": { "$ref": "#/$defs/Direction" },
+        "text": { "type": "string", "description": "Exactly what was spoken, e.g. 'Clear path ahead' or 'Path unclear, stop'." },
+        "blocked": { "type": "array", "items": { "$ref": "#/$defs/Direction" }, "description": "Directions ruled out this decision." }
       }
     },
     "SafetyAlertEvent": {
+      "description": "Highest speech priority: something close in front, or a phone held up toward the wearer.",
       "type": "object",
       "required": ["type", "seq", "source", "t_mono_ms", "kind", "severity", "text", "direction"],
       "properties": {
@@ -117,8 +130,9 @@
         "kind": { "$ref": "#/$defs/SafetyKind" },
         "severity": { "$ref": "#/$defs/Severity" },
         "text": { "type": "string" },
-        "distance_m": { "type": "number" },
-        "direction": { "$ref": "#/$defs/Direction" }
+        "direction": { "$ref": "#/$defs/Direction" },
+        "proximity": { "$ref": "#/$defs/Proximity" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
       }
     },
     "FaultEvent": {
@@ -160,13 +174,26 @@
       "description": "Any event on the bus / WebSocket. Discriminated by `type`.",
       "x-discriminator": "type",
       "oneOf": [
-        { "$ref": "#/$defs/PersonRecognizedEvent" },
-        { "$ref": "#/$defs/UnknownPersonEvent" },
-        { "$ref": "#/$defs/CueEvent" },
+        { "$ref": "#/$defs/PersonSeenEvent" },
+        { "$ref": "#/$defs/ObstacleSeenEvent" },
+        { "$ref": "#/$defs/ClearPathEvent" },
         { "$ref": "#/$defs/SafetyAlertEvent" },
         { "$ref": "#/$defs/FaultEvent" },
         { "$ref": "#/$defs/HealthEvent" }
       ]
+    },
+
+    "Settings": {
+      "type": "object",
+      "required": ["volume", "speech_rate", "announce_people", "announce_obstacles", "safety_sensitivity", "info_min_interval_s"],
+      "properties": {
+        "volume": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "speech_rate": { "type": "number", "minimum": 0.5, "maximum": 2.0 },
+        "announce_people": { "type": "boolean", "description": "Say where people are. Safety alerts about people are always spoken." },
+        "announce_obstacles": { "type": "boolean", "description": "Name obstacles and their side." },
+        "safety_sensitivity": { "$ref": "#/$defs/Sensitivity" },
+        "info_min_interval_s": { "type": "integer", "minimum": 10, "maximum": 600, "description": "Minimum seconds between low-priority announcements (people, obstacles). Safety and navigation are never delayed by this." }
+      }
     },
 
     "Command": {
@@ -177,39 +204,23 @@
         "type": { "const": "command" },
         "t_mono_ms": { "type": "integer" },
         "command": { "$ref": "#/$defs/CommandKind" },
-        "person_id": { "type": "integer" }
+        "settings": { "$ref": "#/$defs/Settings", "description": "Set on reload_settings: brim applies these without reading SQLite." },
+        "pin": { "type": "string", "description": "Set on speak_pairing_pin: the 6-digit pairing PIN to speak in the earpiece." }
       }
     },
 
-    "Person": {
-      "type": "object",
-      "required": ["id", "display_name", "enrolled_at", "has_name_clip", "has_embedding"],
-      "properties": {
-        "id": { "type": "integer" },
-        "display_name": { "type": "string" },
-        "enrolled_at": { "type": "string" },
-        "last_seen_at": { "type": "string" },
-        "has_name_clip": { "type": "boolean" },
-        "has_embedding": { "type": "boolean" }
-      }
-    },
-    "PersonPatch": {
-      "type": "object",
-      "required": ["display_name"],
-      "properties": {
-        "display_name": { "type": "string", "minLength": 1, "maxLength": 60 }
-      }
-    },
     "ActivityItem": {
+      "description": "One thing the hat noticed. No identity: people are anonymous. Purged 30 minutes after it was seen.",
       "type": "object",
-      "required": ["id", "kind", "direction", "seen_at"],
+      "required": ["id", "kind", "direction", "proximity", "seen_at"],
       "properties": {
         "id": { "type": "integer" },
         "kind": { "$ref": "#/$defs/ActivityKind" },
-        "person_id": { "type": "integer" },
-        "display_name": { "type": "string" },
-        "anon_id": { "type": "string" },
+        "label": { "$ref": "#/$defs/ObstacleKind", "description": "Set when kind is obstacle." },
+        "track_id": { "type": "integer" },
         "direction": { "$ref": "#/$defs/Direction" },
+        "proximity": { "$ref": "#/$defs/Proximity" },
+        "confidence": { "type": "number" },
         "seen_at": { "type": "string" }
       }
     },
@@ -222,18 +233,6 @@
         "severity": { "$ref": "#/$defs/Severity" },
         "text": { "type": "string" },
         "created_at": { "type": "string" }
-      }
-    },
-    "Settings": {
-      "type": "object",
-      "required": ["volume", "speech_rate", "cues_enabled", "announce_strangers", "safety_sensitivity", "cue_min_interval_s"],
-      "properties": {
-        "volume": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "speech_rate": { "type": "number", "minimum": 0.5, "maximum": 2.0 },
-        "cues_enabled": { "type": "boolean" },
-        "announce_strangers": { "type": "boolean" },
-        "safety_sensitivity": { "$ref": "#/$defs/Sensitivity" },
-        "cue_min_interval_s": { "type": "integer", "minimum": 10, "maximum": 600 }
       }
     },
     "HealthResponse": {

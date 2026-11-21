@@ -1,0 +1,12 @@
+{
+  "_comment": "Safety thresholds. Loaded by brim at startup (device/src/common/config.cpp); missing keys fall back to safe defaults so the hat always boots. There is no distance sensor: proximity is estimated from how much of the frame a box fills, so these are area fractions, not metres. info_min_interval_s is floored at 10 and track_forget_s capped at 1800 in code (spec rules).",
+  "person_close_area_frac": 0.18,
+  "object_close_area_frac": 0.22,
+  "near_area_frac": 0.06,
+  "min_confidence": 0.60,
+  "phone_min_confidence": 0.55,
+  "repeat_suppress_s": 10,
+  "track_forget_s": 1800,
+  "info_min_interval_s": 10,
+  "info_max_age_ms": 3000
+}

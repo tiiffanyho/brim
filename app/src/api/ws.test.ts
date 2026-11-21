@@ -61,8 +61,11 @@ describe("EventStream", () => {
     const ws = FakeWS.instances[0]!;
     expect(ws.protocol).toBe(WS_PROTOCOL);
     ws.open();
-    ws.onmessage?.({ data: JSON.stringify({ type: "cue", seq: 1, source: "brim", t_mono_ms: 1, cue: "waving", text: "hi" }) });
+    ws.onmessage?.({
+      data: JSON.stringify({ type: "clear_path", seq: 1, source: "brim", t_mono_ms: 1, clear: true, direction: "ahead", text: "Clear path ahead" }),
+    });
     ws.onmessage?.({ data: JSON.stringify({ type: "nope" }) });
+    ws.onmessage?.({ data: JSON.stringify({ type: "person_recognized" }) }); // removed event type
     ws.onmessage?.({ data: "not json" });
     expect(events).toHaveLength(1);
     expect(statuses).toEqual(["connecting", "open"]);

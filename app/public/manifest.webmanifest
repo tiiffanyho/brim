@@ -1,7 +1,7 @@
 {
   "name": "Brim",
   "short_name": "Brim",
-  "description": "Companion app for the Brim hat: people, activity, alerts and device health.",
+  "description": "Companion app for the Brim hat: activity, safety alerts, settings and device health.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

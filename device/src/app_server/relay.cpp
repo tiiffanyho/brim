@@ -28,19 +28,22 @@ std::string process_event(const std::string& payload, Db& db, ServerState& state
   const std::int64_t now = timing::mono_ms();
   bool ok = false;
   switch (*type) {
-    case s::BrimEventType::PersonRecognized: {
-      s::PersonRecognizedEvent e;
-      if ((ok = valid(*j, e, err))) db.record_recognized(e.person_id, s::to_string(e.direction), e.confidence, e.t_mono_ms);
+    case s::BrimEventType::PersonSeen: {
+      s::PersonSeenEvent e;
+      if ((ok = valid(*j, e, err)))
+        db.record_person_seen(e.track_id, s::to_string(e.direction), s::to_string(e.proximity), e.confidence, e.t_mono_ms);
       break;
     }
-    case s::BrimEventType::UnknownPerson: {
-      s::UnknownPersonEvent e;
-      if ((ok = valid(*j, e, err))) db.record_stranger(e.anon_id, s::to_string(e.direction), e.t_mono_ms);
+    case s::BrimEventType::ObstacleSeen: {
+      s::ObstacleSeenEvent e;
+      if ((ok = valid(*j, e, err)))
+        db.record_obstacle_seen(s::to_string(e.label), e.track_id.value_or(0), s::to_string(e.direction),
+                                s::to_string(e.proximity), e.confidence, e.t_mono_ms);
       break;
     }
-    case s::BrimEventType::Cue: {
-      s::CueEvent e;
-      ok = valid(*j, e, err);
+    case s::BrimEventType::ClearPath: {
+      s::ClearPathEvent e;
+      ok = valid(*j, e, err);  // navigation advice is live-only; nothing to store
       break;
     }
     case s::BrimEventType::SafetyAlert: {
@@ -88,7 +91,7 @@ void run_relay(Db& db, ServerState& state, const Broadcast& broadcast, const std
     auto now = timing::mono_ms();
     if (now >= next_purge) {
       int n = db.purge();
-      if (n > 0) BRIM_LOGI("relay", "privacy purge removed %d old rows", n);
+      if (n > 0) BRIM_LOGI("relay", "privacy purge removed %d rows older than the retention window", n);
       next_purge = now + 60000;
     }
     auto m = ep->receive(250);

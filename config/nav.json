@@ -1,0 +1,7 @@
+{
+  "_comment": "Navigation thresholds: how the frame is split into left/ahead/right and how sure we must be before naming a direction. When nothing clears these bars brim says 'Path unclear, stop' instead of guessing. Filled in by the navigation phase; loaded by device/src/common/config.cpp.",
+  "side_margin_frac": 0.33,
+  "clear_min_width_frac": 0.25,
+  "clear_max_area_frac": 0.04,
+  "decision_hold_ms": 1500
+}

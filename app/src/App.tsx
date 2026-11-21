@@ -4,11 +4,9 @@ import { ActivityScreen } from "./screens/Activity";
 import { AlertsScreen } from "./screens/Alerts";
 import { DeviceHealthScreen } from "./screens/DeviceHealth";
 import { PairScreen } from "./screens/Pair";
-import { PeopleScreen } from "./screens/People";
 import { SettingsScreen } from "./screens/Settings";
 
 const ROUTES = [
-  { path: "people", label: "People", Component: PeopleScreen },
   { path: "activity", label: "Activity", Component: ActivityScreen },
   { path: "alerts", label: "Alerts", Component: AlertsScreen },
   { path: "settings", label: "Settings", Component: SettingsScreen },
@@ -18,7 +16,7 @@ type RoutePath = (typeof ROUTES)[number]["path"];
 
 function currentRoute(): RoutePath {
   const h = window.location.hash.replace(/^#\/?/, "");
-  return (ROUTES.find((r) => r.path === h)?.path ?? "people") as RoutePath;
+  return (ROUTES.find((r) => r.path === h)?.path ?? "activity") as RoutePath;
 }
 
 export function App() {

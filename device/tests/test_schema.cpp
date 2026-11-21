@@ -55,9 +55,9 @@ TEST_CASE("all example events parse and round-trip") {
     REQUIRE(type.has_value());
     bool ok = false;
     switch (*type) {
-      case BrimEventType::PersonRecognized: ok = roundtrip<PersonRecognizedEvent>(*j); break;
-      case BrimEventType::UnknownPerson: ok = roundtrip<UnknownPersonEvent>(*j); break;
-      case BrimEventType::Cue: ok = roundtrip<CueEvent>(*j); break;
+      case BrimEventType::PersonSeen: ok = roundtrip<PersonSeenEvent>(*j); break;
+      case BrimEventType::ObstacleSeen: ok = roundtrip<ObstacleSeenEvent>(*j); break;
+      case BrimEventType::ClearPath: ok = roundtrip<ClearPathEvent>(*j); break;
       case BrimEventType::SafetyAlert: ok = roundtrip<SafetyAlertEvent>(*j); break;
       case BrimEventType::Fault: ok = roundtrip<FaultEvent>(*j); break;
       case BrimEventType::Health: ok = roundtrip<HealthEvent>(*j); break;
@@ -69,46 +69,88 @@ TEST_CASE("all example events parse and round-trip") {
 }
 
 TEST_CASE("missing required field is rejected") {
-  auto j = json::parse(R"({"type":"person_recognized","seq":1,"source":"brim","t_mono_ms":1,"person_id":1,"confidence":0.9,"direction":"left"})");
+  auto j = json::parse(R"({"type":"person_seen","seq":1,"source":"brim","t_mono_ms":1,"track_id":1,"direction":"left","confidence":0.9})");
   REQUIRE(j.has_value());
-  PersonRecognizedEvent e;
+  PersonSeenEvent e;
   std::string err;
   CHECK(!from_json(*j, e, &err));
-  CHECK(err.find("display_name") != std::string::npos);
+  CHECK(err.find("proximity") != std::string::npos);
 }
 
 TEST_CASE("wrong discriminator and bad enum are rejected") {
-  auto j = json::parse(R"({"type":"cue","seq":1,"source":"brim","t_mono_ms":1,"cue":"dancing","text":"x"})");
+  auto j = json::parse(
+      R"({"type":"obstacle_seen","seq":1,"source":"brim","t_mono_ms":1,"label":"dragon","direction":"ahead","proximity":"close","confidence":0.9})");
   REQUIRE(j.has_value());
-  CueEvent c;
-  CHECK(!from_json(*j, c));  // "dancing" is not a CueKind
-  PersonRecognizedEvent p;
+  ObstacleSeenEvent o;
+  CHECK(!from_json(*j, o));  // "dragon" is not an ObstacleKind
+  PersonSeenEvent p;
   CHECK(!from_json(*j, p));  // type mismatch
   CHECK(!brimEvent_type_of(*json::parse(R"({"type":"nope"})")).has_value());
+  CHECK(!brimEvent_type_of(*json::parse(R"({"type":"person_recognized"})")).has_value());  // gone for good
+}
+
+TEST_CASE("clear_path says 'stop' rather than guessing a direction") {
+  auto j = json::parse(
+      R"({"type":"clear_path","seq":9,"source":"brim","t_mono_ms":9,"clear":false,"direction":"unknown","text":"Path unclear, stop","blocked":["left","ahead","right"]})");
+  REQUIRE(j.has_value());
+  ClearPathEvent e;
+  REQUIRE(from_json(*j, e));
+  CHECK(!e.clear);
+  CHECK(e.direction == Direction::Unknown);
+  REQUIRE(e.blocked.has_value());
+  CHECK_EQ(e.blocked->size(), 3u);
+  CHECK(to_json(e) == *j);
 }
 
 TEST_CASE("optional fields: absent stays absent, present is kept") {
   SafetyAlertEvent a;
   a.seq = 1; a.source = "brim"; a.t_mono_ms = 5;
-  a.kind = SafetyKind::StepOrCurb; a.severity = Severity::Warning; a.text = "Curb"; a.direction = Direction::Ahead;
+  a.kind = SafetyKind::ObjectClose; a.severity = Severity::Warning; a.text = "Chair close ahead";
+  a.direction = Direction::Ahead;
   auto j = to_json(a);
-  CHECK(j.find("distance_m") == nullptr);
-  CHECK_EQ(j.get_string("kind"), "step_or_curb");
-  a.distance_m = 0.8;
+  CHECK(j.find("confidence") == nullptr);
+  CHECK(j.find("distance_m") == nullptr);  // there is no distance sensor on the hat
+  CHECK_EQ(j.get_string("kind"), "object_close");
+  a.confidence = 0.8;
   SafetyAlertEvent b;
   REQUIRE(from_json(to_json(a), b));
-  REQUIRE(b.distance_m.has_value());
-  CHECK(*b.distance_m == 0.8);
+  REQUIRE(b.confidence.has_value());
+  CHECK(*b.confidence == 0.8);
 }
 
-TEST_CASE("API payloads: Settings and Person") {
+TEST_CASE("API payloads: Settings") {
   Settings s{70, 1.0, true, false, Sensitivity::Normal, 10};
   Settings t;
   REQUIRE(from_json(to_json(s), t));
   CHECK_EQ(t.volume, 70);
+  CHECK(t.announce_people);
+  CHECK(!t.announce_obstacles);
   CHECK(t.safety_sensitivity == Sensitivity::Normal);
   auto bad = json::parse(R"({"volume":"loud"})");
   CHECK(!from_json(*bad, t));
+}
+
+TEST_CASE("commands carry their payload: settings and the pairing PIN") {
+  Command c;
+  c.t_mono_ms = 12;
+  c.command = CommandKind::ReloadSettings;
+  c.settings = Settings{55, 1.25, false, true, Sensitivity::High, 30};
+  Command back;
+  REQUIRE(from_json(to_json(c), back));
+  REQUIRE(back.settings.has_value());
+  CHECK_EQ(back.settings->volume, 55);
+  CHECK(back.settings->safety_sensitivity == Sensitivity::High);
+  CHECK(!back.pin.has_value());
+
+  Command pin;
+  pin.t_mono_ms = 13;
+  pin.command = CommandKind::SpeakPairingPin;
+  pin.pin = "048275";
+  Command pin_back;
+  REQUIRE(from_json(to_json(pin), pin_back));
+  REQUIRE(pin_back.pin.has_value());
+  CHECK_EQ(*pin_back.pin, "048275");
+  CHECK(!pin_back.settings.has_value());
 }
 
 MINI_TEST_MAIN()
