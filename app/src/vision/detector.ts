@@ -37,14 +37,14 @@ export interface Seen extends Detection {
 export async function loadDetector(minScore: number): Promise<{ detector: ObjectDetector; modelSource: "local" | "google" }> {
   const vision = await FilesetResolver.forVisionTasks("/vision-wasm");
   const local = await fetch(LOCAL_MODEL, { method: "HEAD" }).then((r) => r.ok).catch(() => false);
-  const make = (delegate: "GPU" | "CPU") =>
-    ObjectDetector.createFromOptions(vision, {
-      baseOptions: { modelAssetPath: local ? LOCAL_MODEL : REMOTE_MODEL, delegate },
-      runningMode: "VIDEO",
-      scoreThreshold: Math.min(minScore, 0.4), // show a little more than the hat acts on
-      maxResults: 15,
-    });
-  const detector = await make("GPU").catch(() => make("CPU"));
+  // CPU, like the hat (the Pi has no GPU delegate). The GPU delegate's first run can freeze
+  // Chrome on a Mac for many seconds while it compiles shaders ("Page unresponsive").
+  const detector = await ObjectDetector.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: local ? LOCAL_MODEL : REMOTE_MODEL, delegate: "CPU" },
+    runningMode: "VIDEO",
+    scoreThreshold: Math.min(minScore, 0.4), // show a little more than the hat acts on
+    maxResults: 15,
+  });
   return { detector, modelSource: local ? "local" : "google" };
 }
 

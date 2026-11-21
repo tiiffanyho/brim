@@ -10,6 +10,7 @@ import { focalFromVfov, Tracker, type Track } from "../vision/tracker";
 
 type Status = "idle" | "loading" | "running" | "error";
 const FOCAL_KEY = "brim-camera-focal";
+const FRAME_MS = 66;
 const PURPLE = "#8b5cf6";
 const RED = "#ef4444";
 const GREEN = "#22c55e";
@@ -96,11 +97,15 @@ export function CameraTestScreen() {
     let frames = 0;
     let windowStart = performance.now();
     let lastVideoTime = -1;
+    let lastRun = 0;
     const tick = () => {
       raf.current = requestAnimationFrame(tick);
       if (v.readyState < 2 || v.currentTime === lastVideoTime) return;
-      lastVideoTime = v.currentTime;
       const now = performance.now();
+      // The hat runs at about 15 fps (66 ms a frame); do the same so the page stays responsive.
+      if (now - lastRun < FRAME_MS) return;
+      lastRun = now;
+      lastVideoTime = v.currentTime;
       const seen: Seen[] = detect(d, v, now);
       const ms = performance.now() - now;
       const live = tracker.current.update(seen, now);
