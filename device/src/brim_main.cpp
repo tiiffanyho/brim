@@ -45,6 +45,7 @@
 #include "common/sysinfo.hpp"
 #include "common/timing.hpp"
 #include "detect/detector.hpp"
+#include "detect/traffic_light.hpp"
 #include "ipc/bus.hpp"
 #include "nav/nav.hpp"
 #include "safety/safety_monitor.hpp"
@@ -76,6 +77,7 @@ struct Ctx {
   config::SafetyThresholds safety;
   config::NavThresholds nav;
   config::DetectConfig detect;
+  config::TrafficConfig traffic;  // feasibility test; cue off unless config/traffic.json says so
   bool fake = false;
   std::string fake_chair;  // non-empty: made-up boxes through the real path (see --fake-chair)
   events::EventStamper stamper{"brim"};
@@ -269,6 +271,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
                             static_cast<float>(c.detect.track_match_iou), c.detect.track_match_window_ms,
                             static_cast<float>(c.detect.track_center_gate));
   detect::DetectPacer pacer(c.detect.budget_ms, c.detect.stride);
+  detect::TrafficCueLimiter traffic_cues(c.traffic.cue_interval_ms);
   detect::StageStats stage_stats;
   std::int64_t stats_window_start = timing::mono_ms();
   std::int64_t last_dets_log_ms = 0;
@@ -388,8 +391,34 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       BRIM_LOGI("nav", "%s", text.c_str());
     }
 
+    // 2b. Traffic light feasibility test (config/traffic.json cue_enabled; off by default). Reports
+    //     what it sees and nothing more: never walk, cross, go or safe to cross, never a direction.
+    //     Navigation priority, queued after this frame's safety alerts and direction, so it can
+    //     never replace or delay a warning. One cue per light per cue_interval_s.
+    if (c.traffic.cue_enabled) {
+      for (const auto& d : dets) {
+        if (d.thing != detect::Thing::TrafficLight || d.score < c.traffic.min_score) continue;
+        if (!traffic_cues.should_cue(d.track_id, now)) continue;
+        const std::int64_t t_col = timing::mono_ns();
+        const auto lc = detect::classify_light(frame.rgb.data(), frame.width, frame.height, d.box, c.traffic);
+        const double colour_ms = static_cast<double>(timing::mono_ns() - t_col) / 1e6;
+        s::TrafficLightSeenEvent e;
+        if (d.track_id >= 0) e.track_id = d.track_id;
+        e.colour = lc.colour;
+        e.confidence = d.score;
+        e.colour_share = lc.share;
+        e.text = detect::traffic_phrase(lc.colour);
+        e.t_capture_mono_ms = frame.t_capture_mono_ms;
+        BRIM_LOGI("traffic", "%s (score %.2f; red %d, green %d of %d px; colour check %.2f ms)", e.text.c_str(), d.score,
+                  lc.red, lc.green, lc.total, colour_ms);
+        const std::string text = e.text;
+        c.cue(audio::Priority::Nav, std::move(e), text, frame.t_capture_mono_ms);
+      }
+    }
+
     // 3. Everything else, lowest priority, rate-limited per track.
     for (const auto& d : dets) {
+      if (d.thing == detect::Thing::TrafficLight) continue;  // step 2b only; never an obstacle
       if (d.score < c.safety.min_confidence) continue;  // never name what we did not clearly see
       const auto dir = detect::direction_of(d.box, c.nav.side_margin_frac);
       const auto prox = detect::proximity_of(d.box.area(),
@@ -560,6 +589,7 @@ int main(int argc, char** argv) {
   c.safety = config::load_safety(config::config_dir() + "/safety.json");
   c.nav = config::load_nav(config::config_dir() + "/nav.json");
   c.detect = config::load_detect(config::config_dir() + "/detect.json");
+  c.traffic = config::load_traffic(config::config_dir() + "/traffic.json");
 
   ipc::EventBus bus(events::kAppServerChannel);
   ipc::EventBus supervisor_bus(events::kSupervisorChannel, 4);
@@ -579,6 +609,7 @@ int main(int argc, char** argv) {
   dcfg.threads = c.detect.threads;
   dcfg.min_confidence = static_cast<float>(c.safety.min_confidence);
   dcfg.phone_min_confidence = static_cast<float>(c.safety.phone_min_confidence);
+  dcfg.traffic_min_confidence = static_cast<float>(c.traffic.min_score);
   auto det = use_hw ? detect::make_tflite_detector(dcfg) : detect::make_stub_detector();
   auto safety_mon = use_hw ? safety::make_vision_safety_monitor(c.safety, c.nav) : safety::make_stub_safety_monitor();
   c.apply_settings(config::default_settings());  // until app_server sends the stored ones
