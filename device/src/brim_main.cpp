@@ -23,11 +23,13 @@
 //        SIGUSR1           demo: freeze the pipeline now
 #include <atomic>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <random>
 #include <thread>
+#include <vector>
 
 #include "audio/audio_out.hpp"
 #include "audio/speak_queue.hpp"
@@ -253,6 +255,12 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
   detect::TrackStore tracks(c.safety.track_forget_s * 1000, c.safety.repeat_suppress_s * 1000,
                             static_cast<float>(c.detect.track_match_iou), c.detect.track_match_window_ms,
                             static_cast<float>(c.detect.track_center_gate));
+  detect::DetectPacer pacer(c.detect.budget_ms, c.detect.stride);
+  detect::StageStats stage_stats;
+  std::int64_t stats_window_start = timing::mono_ms();
+  std::int64_t last_dets_log_ms = 0;
+  std::vector<detect::Detection> dets;  // reused every frame: no per-frame allocation
+  dets.reserve(32);
   capture::Frame frame;
   std::int64_t start = timing::mono_ms();
   std::int64_t fps_window_start = start;
@@ -308,8 +316,48 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       c.say(audio::Priority::Nav, "Brim is working again", now);
     }
 
-    auto dets = det.detect(frame);
+    // Over budget? Then the detector runs on every 2nd frame (DetectPacer). Skipped frames do no
+    // detection-based work at all: we never re-announce or re-judge from a stale frame.
+    if (!pacer.tick()) continue;
+
+    // Detection: resize -> invoke -> decode (timed inside the detector), then tracking.
+    det.detect(frame, dets);
+    const std::int64_t t_track = timing::mono_ns();
     tracks.observe(dets, now);
+    const double track_ms = static_cast<double>(timing::mono_ns() - t_track) / 1e6;
+    const auto st = det.last_stage_times();
+    stage_stats.add(st, track_ms);
+    if (pacer.record(st.total() + track_ms))
+      BRIM_LOGW("detect", "detect avg %.1f ms vs %.0f ms budget: now running %s", pacer.average_ms(),
+                c.detect.budget_ms, pacer.stride() == 2 ? "every 2nd frame" : "every frame");
+    BRIM_LOGD("detect", "frame %llu: %zu found, resize %.1f + invoke %.1f + decode %.1f + track %.1f = %.1f ms (budget %.0f)",
+              static_cast<unsigned long long>(frame.index), dets.size(), st.resize_ms, st.invoke_ms, st.decode_ms, track_ms,
+              st.total() + track_ms, c.detect.budget_ms);
+    if (now - stats_window_start >= c.detect.stats_period_s * 1000LL && stage_stats.runs > 0) {
+      const double n = stage_stats.runs;
+      const double avg_total = (stage_stats.sum.total() + stage_stats.track_sum) / n;
+      const double max_total = stage_stats.max.total() + stage_stats.track_max;  // upper bound
+      BRIM_LOGI("detect",
+                "timing over %d runs (avg/max ms): resize %.1f/%.1f, invoke %.1f/%.1f, decode %.2f/%.2f, track %.2f/%.2f, "
+                "total %.1f/%.1f vs %.0f ms budget %s, %s",
+                stage_stats.runs, stage_stats.sum.resize_ms / n, stage_stats.max.resize_ms, stage_stats.sum.invoke_ms / n,
+                stage_stats.max.invoke_ms, stage_stats.sum.decode_ms / n, stage_stats.max.decode_ms, stage_stats.track_sum / n,
+                stage_stats.track_max, avg_total, max_total, c.detect.budget_ms, avg_total <= c.detect.budget_ms ? "OK" : "OVER",
+                pacer.stride() == 2 ? "every 2nd frame" : "every frame");
+      stage_stats.reset();
+      stats_window_start = now;
+    }
+    if (!dets.empty() && now - last_dets_log_ms >= 1000) {  // what we see, once a second (boxes only, no identity)
+      last_dets_log_ms = now;
+      char line[512];
+      int len = 0;
+      for (const auto& d : dets) {
+        if (len >= static_cast<int>(sizeof(line)) - 64) break;
+        len += std::snprintf(line + len, sizeof(line) - len, "%s %s#%d %.2f [x%.2f y%.2f w%.2f h%.2f]", len ? "," : "",
+                             detect::to_string(d.thing), d.track_id, d.score, d.box.x, d.box.y, d.box.w, d.box.h);
+      }
+      BRIM_LOGI("detect", "%zu seen:%s", dets.size(), line);
+    }
     const auto settings = c.settings();
 
     // 1. Safety first: anything close in front, or a phone pointed at the wearer.
