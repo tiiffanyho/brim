@@ -10,7 +10,7 @@ bad()  { printf '\033[1;31m  !!  \033[0m %s\n' "$*"; }
 
 echo "== Processes =="
 # sudo: Brim and the camera service run as root, and plain `pidin` only lists your own programs.
-PROCS=$(sudo pidin -f a 2>/dev/null || sudo pidin 2>/dev/null)
+PROCS=$(sudo pidin 2>/dev/null)
 for p in supervisor brim app_server sensor; do
   if echo "$PROCS" | grep -E -q "bin/$p( |$)"; then ok "$p is running"; else bad "$p is NOT running"; fi
 done

@@ -56,10 +56,10 @@ install_one qnx-sf-base-dev            || MISSING_CORE=1   # QNX camera headers 
 APP_SERVER=ON                                              # app_server talks to the phone app
 install_one sqlite-dev sqlite3-dev libsqlite3-dev         || APP_SERVER=OFF
 install_one libwebsockets-dev libwebsockets              || APP_SERVER=OFF
+install_one libuv-dev                                     || APP_SERVER=OFF  # libwebsockets links libuv (found on the Pi)
 
 # For the AI detector (code person 1). Not needed to build today's code, so only warn.
 install_one tflite-runtime-dev || warn "tflite-runtime-dev missing: the detector can't be built yet"
-install_one opencv-dev         || warn "opencv-dev missing: only needed if the detector uses OpenCV"
 
 [ "$MISSING_CORE" = 0 ] || die "a core build tool is missing (see MISSING above). Send this output to Claude."
 
@@ -92,8 +92,9 @@ echo "  using $CXX_BIN"
 [ -f /usr/include/camera/camera_api.h ] || die "camera headers not found at /usr/include/camera (qnx-sf-base-dev)"
 
 say "4/6 Building Brim on the Pi (a few minutes)"
-GEN="-G Unix Makefiles"; command -v make >/dev/null 2>&1 || GEN="-G Ninja"
-cmake -S "$REPO/device" -B "$BUILD" $GEN \
+# Generator: CMake's default is "Unix Makefiles" (make is installed); use Ninja only if make isn't.
+GEN_NAME="Unix Makefiles"; command -v make >/dev/null 2>&1 || GEN_NAME="Ninja"
+cmake -S "$REPO/device" -B "$BUILD" -G "$GEN_NAME" \
       -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DCMAKE_CXX_COMPILER="$CXX_BIN" \
       -DBRIM_BUILD_TESTS=ON \
