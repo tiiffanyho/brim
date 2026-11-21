@@ -63,6 +63,29 @@ export class EventStream {
     this.connect();
   }
 
+  /**
+   * Drop the current socket without waiting for it to close, and connect again now. Used when
+   * health events stop: after a Wi-Fi drop the old socket can sit "open" for minutes.
+   */
+  forceReconnect(): void {
+    if (this.stopped) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    const old = this.ws;
+    this.ws = null;
+    if (old) {
+      old.onopen = old.onmessage = old.onclose = old.onerror = null;
+      try {
+        old.close();
+      } catch {
+        /* already dead */
+      }
+      this.opts.onStatus?.("closed");
+    }
+    this.attempt = 0;
+    this.connect();
+  }
+
   private connect(): void {
     this.opts.onStatus?.("connecting");
     let ws: WebSocket;
