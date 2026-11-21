@@ -153,3 +153,15 @@ legend { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em; text-trans
 .next { background: var(--soft); border-radius: 1rem; padding: 0.75rem 0.9rem; }
 .next .kicker { color: var(--accent); }
 .next p { margin: 0.2rem 0 0; font-weight: 600; }
+
+/* Laptop camera test (dev only) */
+main:has(.camera-test) { max-width: 46rem; }
+.cam { position: relative; width: 100%; aspect-ratio: 4 / 3; background: #0f0b1c; border-radius: 1.3rem; overflow: hidden; box-shadow: var(--shadow); margin: 0.5rem 0 0.9rem; }
+.cam video, .cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.cam-hud { position: absolute; top: 0.6rem; left: 0.7rem; right: 0.7rem; display: flex; justify-content: space-between; font: 700 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff; text-shadow: 0 1px 2px #000; }
+.cam-hud .rec.on { color: #f87171; }
+.cam-start { position: absolute; inset: 0; display: grid; place-items: center; padding: 1rem; }
+.cam-start button { width: auto; min-width: 14rem; }
+.says-card .quote { font-size: 1.4rem; }
+.says-card.is-alert { background: var(--danger-bg); }
+.says-card.is-alert .quote { color: var(--danger); }
