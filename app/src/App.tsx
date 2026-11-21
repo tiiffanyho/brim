@@ -1,22 +1,43 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useBrim } from "./state";
 import { ActivityScreen } from "./screens/Activity";
 import { AlertsScreen } from "./screens/Alerts";
 import { DeviceHealthScreen } from "./screens/DeviceHealth";
+import { LiveScreen } from "./screens/Live";
 import { PairScreen } from "./screens/Pair";
 import { SettingsScreen } from "./screens/Settings";
 
+// Laptop webcam test, loaded only in `npm run dev` so the hat's build never contains it.
+const DesktopCameraLazy = import.meta.env.DEV
+  ? lazy(() => import("./screens/DesktopCamera").then((m) => ({ default: m.DesktopCameraScreen })))
+  : null;
+function CameraTest() {
+  return DesktopCameraLazy ? (
+    <Suspense fallback={<p role="status">Loading camera…</p>}>
+      <DesktopCameraLazy />
+    </Suspense>
+  ) : null;
+}
+
+// Phone prototype (#/phone), dev only: onboarding, Live and Settings, fed by the laptop camera.
+const PhoneProtoLazy = import.meta.env.DEV
+  ? lazy(() => import("./proto/PhoneProto").then((m) => ({ default: m.PhoneProtoScreen })))
+  : null;
+
 const ROUTES = [
+  { path: "live", label: "Live", Component: LiveScreen },
   { path: "activity", label: "Activity", Component: ActivityScreen },
   { path: "alerts", label: "Alerts", Component: AlertsScreen },
   { path: "settings", label: "Settings", Component: SettingsScreen },
   { path: "health", label: "Device health", Component: DeviceHealthScreen },
+  // Laptop webcam test: only in `npm run dev`, never in the build that goes on the hat.
+  ...(import.meta.env.DEV ? [{ path: "camera", label: "Camera", Component: CameraTest }] : []),
 ] as const;
 type RoutePath = (typeof ROUTES)[number]["path"];
 
 function currentRoute(): RoutePath {
   const h = window.location.hash.replace(/^#\/?/, "");
-  return (ROUTES.find((r) => r.path === h)?.path ?? "activity") as RoutePath;
+  return (ROUTES.find((r) => r.path === h)?.path ?? "live") as RoutePath;
 }
 
 export function App() {
@@ -29,7 +50,9 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const banner = linkLost
+  const banner = route === "camera"
+    ? ""
+    : linkLost
     ? "Connection lost. Retrying…"
     : connection === "offline"
       ? "Can't reach your hat. Check the phone is on the hat's Wi-Fi. Retrying…"
@@ -38,6 +61,22 @@ export function App() {
         : "";
 
   const Active = ROUTES.find((r) => r.path === route)!.Component;
+
+  // Dev-only full-screen pages: the phone prototype and the desktop camera dashboard.
+  if (DesktopCameraLazy && route === "camera") {
+    return (
+      <Suspense fallback={<p role="status">Loading…</p>}>
+        <DesktopCameraLazy />
+      </Suspense>
+    );
+  }
+  if (PhoneProtoLazy && window.location.hash.replace(/^#\/?/, "") === "phone") {
+    return (
+      <Suspense fallback={<p role="status">Loading…</p>}>
+        <PhoneProtoLazy />
+      </Suspense>
+    );
+  }
 
   return (
     <div className="app">
@@ -56,7 +95,10 @@ export function App() {
       </header>
 
       <main id="main" tabIndex={-1}>
-        {connection === "checking" ? (
+        {route === "camera" ? (
+          // The camera test needs no hat, so it works before pairing or with app_server off.
+          <Active />
+        ) : connection === "checking" ? (
           <p role="status">Connecting to your hat…</p>
         ) : connection === "unpaired" ? (
           <PairScreen />
