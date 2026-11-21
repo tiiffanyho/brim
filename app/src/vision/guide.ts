@@ -15,12 +15,25 @@ const SEEN_EVERY_MS = 400;
 
 const BRIM_THINGS = new Set<Thing>(["person", "chair", "table", "vehicle", "bicycle", "unknown"]);
 
-/** Same close/near/far rule as the hat (config/safety.json, box area fractions). */
-export function proximityOf(t: Pick<Track, "thing" | "box">): "close" | "near" | "far" {
+/**
+ * Same close/near/far rule as the hat (config/safety.json, box area fractions). `scale` comes from
+ * the wearer's sensitivity: below 1 warns earlier (smaller boxes count as close), above 1 later.
+ */
+export function proximityOf(t: Pick<Track, "thing" | "box">, scale = 1): "close" | "near" | "far" {
   const a = t.box.w * t.box.h;
-  const close = t.thing === "person" ? safetyJson.person_close_area_frac : safetyJson.object_close_area_frac;
-  return a >= close ? "close" : a >= safetyJson.near_area_frac ? "near" : "far";
+  const close = (t.thing === "person" ? safetyJson.person_close_area_frac : safetyJson.object_close_area_frac) * scale;
+  return a >= close ? "close" : a >= safetyJson.near_area_frac * scale ? "near" : "far";
 }
+
+export interface GuideOptions {
+  /** low = only when very close, high = warn earlier. */
+  sensitivity: "low" | "normal" | "high";
+  /** Obstacles and "step left/right". Off = only people and things coming at you. */
+  hazards: boolean;
+  /** Say where people are (never who). */
+  people: boolean;
+}
+const SCALE = { low: 1.35, normal: 1, high: 0.7 } as const;
 /** The walking corridor: middle band, lower half (nav.cpp). */
 export function inCorridor(t: Pick<Track, "box">): boolean {
   const m = NAV.side_margin_frac;
@@ -64,6 +77,11 @@ export interface GuideInput {
 
 export class Guide {
   private seq = 0;
+  private opts: GuideOptions = { sensitivity: "normal", hazards: true, people: true };
+
+  setOptions(o: Partial<GuideOptions>) {
+    this.opts = { ...this.opts, ...o };
+  }
   private lastAlert = new Map<string, number>();
   private lastSeen = new Map<number, number>();
   private needsAllClear = false;
@@ -81,13 +99,22 @@ export class Guide {
   }
 
   /** One frame in, zero or more events out (safety first, then the direction, then info). */
-  update({ now, call, frame, tracks, minConfidence }: GuideInput): BrimEvent[] {
+  update({ now, call: navCall, frame, tracks, minConfidence }: GuideInput): BrimEvent[] {
+    let call = navCall;
     const out: BrimEvent[] = [];
-    const sure = tracks.filter((t) => BRIM_THINGS.has(t.thing) && t.score >= minConfidence);
+    const scale = SCALE[this.opts.sensitivity];
+    const sure = tracks.filter(
+      (t) =>
+        BRIM_THINGS.has(t.thing) &&
+        t.score >= minConfidence &&
+        (this.opts.hazards || t.thing === "person") &&
+        (this.opts.people || t.thing !== "person"),
+    );
+    if (!this.opts.hazards) call = null; // no "step left / right" when hazards are off
 
     // 1. Safety: something close in the walking corridor.
     const close = sure
-      .filter((t) => inCorridor(t) && proximityOf(t) === "close")
+      .filter((t) => inCorridor(t) && proximityOf(t, scale) === "close")
       .sort((a, b) => b.box.h - a.box.h)[0];
     if (close) {
       const text = `Stop. ${nameOf(close.thing)} right in front of you.`;
@@ -141,7 +168,7 @@ export class Guide {
     for (const t of sure) {
       if (now - (this.lastSeen.get(t.id) ?? -Infinity) < SEEN_EVERY_MS) continue;
       this.lastSeen.set(t.id, now);
-      const proximity: Proximity = proximityOf(t);
+      const proximity: Proximity = proximityOf(t, scale);
       if (t.thing === "person") {
         out.push({ type: "person_seen", ...this.base(now), track_id: t.id, direction: sideOf(t), proximity, confidence: t.score });
       } else {
@@ -176,7 +203,7 @@ export class Guide {
       severity,
       text,
       direction: sideOf(t),
-      proximity: proximityOf(t),
+      proximity: proximityOf(t, SCALE[this.opts.sensitivity]),
       confidence: t.score,
     };
   }

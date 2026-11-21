@@ -8,20 +8,20 @@ import { PairScreen } from "./screens/Pair";
 import { SettingsScreen } from "./screens/Settings";
 
 // Laptop webcam test, loaded only in `npm run dev` so the hat's build never contains it.
-const CameraTestLazy = import.meta.env.DEV
-  ? lazy(() => import("./screens/CameraTest").then((m) => ({ default: m.CameraTestScreen })))
+const DesktopCameraLazy = import.meta.env.DEV
+  ? lazy(() => import("./screens/DesktopCamera").then((m) => ({ default: m.DesktopCameraScreen })))
   : null;
 function CameraTest() {
-  return CameraTestLazy ? (
-    <Suspense fallback={<p role="status">Loading camera test…</p>}>
-      <CameraTestLazy />
+  return DesktopCameraLazy ? (
+    <Suspense fallback={<p role="status">Loading camera…</p>}>
+      <DesktopCameraLazy />
     </Suspense>
   ) : null;
 }
 
-// Phone side of the laptop camera demo (#/phone), also dev only: a full-screen Live view.
-const PhoneLinkLazy = import.meta.env.DEV
-  ? lazy(() => import("./screens/PhoneLink").then((m) => ({ default: m.PhoneLinkScreen })))
+// Phone prototype (#/phone), dev only: onboarding, Live and Settings, fed by the laptop camera.
+const PhoneProtoLazy = import.meta.env.DEV
+  ? lazy(() => import("./proto/PhoneProto").then((m) => ({ default: m.PhoneProtoScreen })))
   : null;
 
 const ROUTES = [
@@ -62,10 +62,18 @@ export function App() {
 
   const Active = ROUTES.find((r) => r.path === route)!.Component;
 
-  if (PhoneLinkLazy && window.location.hash.replace(/^#\/?/, "") === "phone") {
+  // Dev-only full-screen pages: the phone prototype and the desktop camera dashboard.
+  if (DesktopCameraLazy && route === "camera") {
     return (
       <Suspense fallback={<p role="status">Loading…</p>}>
-        <PhoneLinkLazy />
+        <DesktopCameraLazy />
+      </Suspense>
+    );
+  }
+  if (PhoneProtoLazy && window.location.hash.replace(/^#\/?/, "") === "phone") {
+    return (
+      <Suspense fallback={<p role="status">Loading…</p>}>
+        <PhoneProtoLazy />
       </Suspense>
     );
   }

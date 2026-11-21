@@ -2,10 +2,18 @@
 // sends the hat's own event shapes, so the phone shows them with the normal Live screen.
 import type { BrimEvent } from "@schema";
 
-export type LinkMsg = BrimEvent | { type: "peers"; phones: number };
+/** Phone -> camera: the wearer's choices that change what the camera calls out. */
+export interface ProtoSettings {
+  type: "proto_settings";
+  sensitivity: "low" | "normal" | "high";
+  hazards: boolean;
+  people: boolean;
+}
+
+export type LinkMsg = BrimEvent | ProtoSettings | { type: "peers"; phones: number };
 
 export interface Link {
-  send(e: BrimEvent): void;
+  send(e: BrimEvent | ProtoSettings): void;
   close(): void;
 }
 

@@ -39,9 +39,10 @@ function cameraLink(): Plugin {
           set.add(ws);
           tellCameras();
           ws.on("message", (data) => {
-            if (role !== "camera") return;
             const text = data.toString();
-            for (const p of phones) if (p.readyState === WebSocket.OPEN) p.send(text);
+            // Camera -> every phone (events). Phone -> every camera (the wearer's settings).
+            const to = role === "camera" ? phones : cameras;
+            for (const p of to) if (p.readyState === WebSocket.OPEN) p.send(text);
           });
           ws.on("close", () => {
             set.delete(ws);
