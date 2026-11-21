@@ -10,8 +10,7 @@ app/dist/
 .DS_Store
 # editor / IDE settings (machine-specific paths)
 .vscode/
-# generated audio and models are large / device-specific
-audio/*.wav
+# models are large / device-specific
 models/*.tflite
 models/*.task
 models/*.bin

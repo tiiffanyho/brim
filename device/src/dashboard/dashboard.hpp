@@ -1,6 +1,7 @@
 // The "dashboard": the HDMI monitor used for the demo (pairing PIN, IP, status). There is no
-// display on the hat itself — the wearer hears the pairing PIN in the earpiece, because app_server
-// sends brim a speak_pairing_pin command when it creates the PIN.
+// display on the hat itself and the Pi plays no sound, so this is the only place the pairing PIN
+// appears: a helper reads it to the wearer or types it into their phone. It is never sent to
+// phones over the event stream.
 #pragma once
 
 #include <memory>

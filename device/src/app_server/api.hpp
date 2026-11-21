@@ -61,8 +61,6 @@ class Api {
 // Builds the reload_settings command brim applies (settings travel with the command so brim never
 // reads SQLite). Used by the API and at startup, so a fresh brim gets the stored settings.
 schema::Command reload_settings_command(const schema::Settings& s);
-// Builds the command that makes brim speak the pairing PIN in the earpiece.
-schema::Command speak_pairing_pin_command(const std::string& pin);
 
 // Query helper: returns the integer value of `key` clamped to [lo, hi], or def.
 int query_int(const std::string& query, const std::string& key, int def, int lo, int hi);

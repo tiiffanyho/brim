@@ -2,21 +2,23 @@
 //
 //   capture -> detect (people + objects, anonymous tracks) -> safety -> navigation
 //                                      |                                  |
-//                                      +---> events (EventBus -> app_server)
-//                                      +---> SpeakQueue -> audio (earpiece)
+//                                      +---> SpeakQueue (cues) -> EventBus -> app_server -> phone
+//                                      +---> health (EventBus, direct)
 //
-// Speech order is safety first, then navigation, then everything else (see audio/speak_queue.hpp).
+// The Pi plays no sound: the phone app speaks. Cues leave in priority order — safety alerts and
+// faults, then navigation, then people and obstacles — with stale and too-frequent info dropped
+// (see audio/speak_queue.hpp).
 // No identity anywhere: no face recognition, no embeddings, no names. People are boxes with a
 // throw-away track id, and tracks are cleared within 30 minutes.
 //
 // Threads:
 //   pipeline  : per-frame loop (camera paced, 15 fps). In --fake mode a scripted scenario injects
 //               realistic events instead of running models.
-//   speaker   : pops the SpeakQueue (priority + silence gate) and plays audio.
+//   cues      : pops the SpeakQueue in priority order and publishes each cue event to app_server.
 //   health    : 1 Hz HealthEvent.
 //   heartbeat : pulses the supervisor every 200 ms *only while the pipeline loop is making
 //               progress*, so a hung pipeline gets restarted.
-//   commands  : receives app_server commands (reload_settings, speak_pairing_pin).
+//   commands  : receives app_server commands (reload_settings).
 //
 // Flags: --fake            scripted fake events, no hardware (laptop default via scripts/dev.sh)
 //        --fake-chair <where>  fake mode, but made-up chair boxes go through the real detect ->
@@ -31,9 +33,10 @@
 #include <mutex>
 #include <random>
 #include <thread>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
-#include "audio/audio_out.hpp"
 #include "audio/speak_queue.hpp"
 #include "capture/camera.hpp"
 #include "common/config.hpp"
@@ -78,7 +81,6 @@ struct Ctx {
   events::EventStamper stamper{"brim"};
   ipc::EventBus* bus = nullptr;
   audio::SpeakQueue* speak = nullptr;
-  audio::AudioOut* audio = nullptr;
   Stats stats;
   std::atomic<bool> detect_healthy{true};  // written by the pipeline, read by the health thread
 
@@ -88,8 +90,12 @@ struct Ctx {
     if (capture_ms > 0) stats.add_latency(static_cast<double>(e.t_mono_ms - capture_ms));
     bus->publish(std::move(json));
   }
-  void say(audio::Priority p, std::string text, std::int64_t created_ms) {
-    speak->push(audio::SpeechItem{p, std::move(text), "", created_ms});
+  // Queues an event for the phone to say. The cue thread publishes it (and stamps t_mono_ms) when
+  // its turn comes; `text` is only for the log.
+  template <class E>
+  void cue(audio::Priority p, E e, std::string text, std::int64_t created_ms) {
+    if (!speak->push(audio::SpeechItem{p, std::move(text), created_ms, audio::CueEvent{std::move(e)}}))
+      BRIM_LOGW("cue", "speak queue full of more urgent cues: %s cue rejected", audio::to_string(p));
   }
 
   // The wearer's settings. Defaults until app_server sends reload_settings (it does at startup).
@@ -106,24 +112,12 @@ struct Ctx {
     sq.info_max_age_ms = safety.info_max_age_ms;
     sq.info_min_interval_ms = v.info_min_interval_s * 1000;
     speak->set_config(sq);
-    if (audio) audio->apply_settings(v);
   }
 
  private:
   mutable std::mutex settings_mu_;
   s::Settings settings_ = config::default_settings();
 };
-
-// Spoken form of a PIN: "1 2 3 4 5 6", so the earpiece reads digits, not "123,456".
-std::string spell_digits(const std::string& pin) {
-  std::string out;
-  for (char c : pin) {
-    if (c < '0' || c > '9') continue;
-    if (!out.empty()) out.push_back(' ');
-    out.push_back(c);
-  }
-  return out;
-}
 
 // ------------------------------------------------------------------ fake scenario
 // A 20-second loop that looks like a walk down a corridor: a person passes, something is close in
@@ -148,15 +142,15 @@ class FakeScenario {
         alert(s::SafetyKind::PersonClose, s::Severity::Critical, "Person close ahead", s::Direction::Ahead, cap);
         path(true, s::Direction::Right, "Clear path on your right, step right", {s::Direction::Ahead}, cap);
         break;
-      case 6:
-        obstacle(s::ObstacleKind::Chair, s::Direction::Ahead, s::Proximity::Close, 0.26, cap);
-        break;
       case 7:
         alert(s::SafetyKind::ObjectClose, s::Severity::Warning, "Chair close ahead", s::Direction::Ahead, cap);
         path(true, s::Direction::Left, "Chair ahead, step left", {s::Direction::Ahead, s::Direction::Right}, cap);
         break;
       case 10:
         alert(s::SafetyKind::PhoneRaised, s::Severity::Warning, "A phone is pointed at you", s::Direction::Ahead, cap);
+        break;
+      case 11:  // 10 s after the person at t=1: the earliest the info limit lets it through
+        obstacle(s::ObstacleKind::Chair, s::Direction::Ahead, s::Proximity::Close, 0.26, cap);
         break;
       case 12:
         path(false, s::Direction::Unknown, "Path unclear, stop", {s::Direction::Left, s::Direction::Ahead, s::Direction::Right},
@@ -195,10 +189,8 @@ class FakeScenario {
     e.confidence = std::uniform_real_distribution<double>(0.82, 0.98)(rng_);
     e.area_frac = area;
     e.t_capture_mono_ms = cap;
-    c_.emit(e, cap);
     if (c_.settings().announce_people)
-      c_.say(audio::Priority::Info,
-             std::string("Person ") + side(d) + (p == s::Proximity::Close ? ", close by" : ""), cap);
+      c_.cue(audio::Priority::Info, e, std::string("Person ") + side(d) + (p == s::Proximity::Close ? ", close by" : ""), cap);
   }
 
   void obstacle(s::ObstacleKind k, s::Direction d, s::Proximity p, double area, std::int64_t cap) {
@@ -210,9 +202,7 @@ class FakeScenario {
     e.confidence = std::uniform_real_distribution<double>(0.70, 0.95)(rng_);
     e.area_frac = area;
     e.t_capture_mono_ms = cap;
-    c_.emit(e, cap);
-    if (c_.settings().announce_obstacles)
-      c_.say(audio::Priority::Info, std::string(s::to_string(k)) + " " + side(d), cap);
+    if (c_.settings().announce_obstacles) c_.cue(audio::Priority::Info, e, std::string(s::to_string(k)) + " " + side(d), cap);
   }
 
   void alert(s::SafetyKind k, s::Severity sev, const char* text, s::Direction d, std::int64_t cap) {
@@ -224,8 +214,7 @@ class FakeScenario {
     e.proximity = s::Proximity::Close;
     e.confidence = std::uniform_real_distribution<double>(0.80, 0.99)(rng_);
     e.t_capture_mono_ms = cap;
-    c_.emit(e, cap);
-    c_.say(audio::Priority::Safety, text, cap);
+    c_.cue(audio::Priority::Safety, e, text, cap);
   }
 
   void path(bool clear, s::Direction d, const char* text, std::vector<s::Direction> blocked, std::int64_t cap) {
@@ -235,8 +224,7 @@ class FakeScenario {
     e.text = text;
     if (!blocked.empty()) e.blocked = std::move(blocked);
     e.t_capture_mono_ms = cap;
-    c_.emit(e, cap);
-    c_.say(audio::Priority::Nav, text, cap);
+    c_.cue(audio::Priority::Nav, e, text, cap);
   }
 
   Ctx& c_;
@@ -244,12 +232,6 @@ class FakeScenario {
   std::int64_t start_ms_ = 0;
   std::int64_t last_t_ = -1;
   std::int64_t track_ = 0;
-};
-
-// Fake VAD: "someone is talking" for 3 s out of every 15 s, to exercise the info silence gate.
-class FakeVad final : public audio::VoiceActivity {
- public:
-  bool someone_talking() override { return (timing::mono_ms() / 1000) % 15 < 3; }
 };
 
 // Made-up chair boxes for --fake-chair, so the real nav code can be checked without a camera.
@@ -333,18 +315,16 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
         s::FaultEvent f;
         f.component = det.healthy() ? "safety" : "detect";
         f.action = s::FaultAction::Degraded;
-        f.message = "cannot see: obstacle warnings are not reliable";
-        c.emit(f, 0);
-        c.say(audio::Priority::Safety, "Brim cannot see. Stop and ask for help", now);
+        f.message = "Brim cannot see. Stop";  // short: the phone reads it out as is
+        c.cue(audio::Priority::Safety, f, f.message, now);
       }
     } else if (!detect_was_healthy) {  // recovered
       detect_was_healthy = true;
       s::FaultEvent f;
       f.component = "detect";
       f.action = s::FaultAction::Recovered;
-      f.message = "detection is working again";
-      c.emit(f, 0);
-      c.say(audio::Priority::Nav, "Brim is working again", now);
+      f.message = "Brim can see again";
+      c.cue(audio::Priority::Safety, f, f.message, now);  // faults go with safety, both ways
     }
 
     // Over budget? Then the detector runs on every 2nd frame (DetectPacer). Skipped frames do no
@@ -395,8 +375,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
     // 1. Safety first: anything close in front, or a phone pointed at the wearer.
     for (auto& alert : safety_mon.check(frame, dets)) {
       alert.t_capture_mono_ms = frame.t_capture_mono_ms;
-      c.emit(alert, frame.t_capture_mono_ms);
-      c.say(audio::Priority::Safety, alert.text, frame.t_capture_mono_ms);
+      c.cue(audio::Priority::Safety, alert, alert.text, frame.t_capture_mono_ms);
     }
 
     // 2. Navigation: the safest direction to move, or "Path unclear, stop". It runs after the
@@ -405,8 +384,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
     if (auto path = navigator.update(dets, now)) {
       path->t_capture_mono_ms = frame.t_capture_mono_ms;
       const std::string text = path->text;
-      c.emit(*path, frame.t_capture_mono_ms);
-      c.say(audio::Priority::Nav, text, frame.t_capture_mono_ms);
+      c.cue(audio::Priority::Nav, *path, text, frame.t_capture_mono_ms);
       BRIM_LOGI("nav", "%s", text.c_str());
     }
 
@@ -428,7 +406,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
         e.confidence = d.score;
         e.area_frac = d.box.area();
         e.t_capture_mono_ms = frame.t_capture_mono_ms;
-        c.emit(e, frame.t_capture_mono_ms);
+        c.cue(audio::Priority::Info, e, std::string("person ") + s::to_string(dir), frame.t_capture_mono_ms);
       } else {
         auto kind = detect::obstacle_kind_of(d.thing);
         if (!kind || !settings.announce_obstacles) continue;
@@ -440,7 +418,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
         e.confidence = d.score;
         e.area_frac = d.box.area();
         e.t_capture_mono_ms = frame.t_capture_mono_ms;
-        c.emit(e, frame.t_capture_mono_ms);
+        c.cue(audio::Priority::Info, e, std::string(s::to_string(*kind)) + " " + s::to_string(dir), frame.t_capture_mono_ms);
       }
     }
     tracks.expire(now);
@@ -448,14 +426,26 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
   }
 }
 
-void speaker_loop(Ctx& c, audio::AudioOut& out, audio::VoiceActivity& vad) {
+// Sends cues to the phone in priority order. Publishing is fire-and-forget (bounded bus queue), so
+// this never blocks on app_server. t_mono_ms is stamped here, at send time.
+void cue_loop(Ctx& c) {
   while (!g_stop) {
-    auto item = c.speak->pop_next(timing::mono_ms(), vad.someone_talking());
+    auto item = c.speak->pop_next(timing::mono_ms());
     if (!item) {
-      timing::sleep_ms(50);
+      timing::sleep_ms(20);
       continue;
     }
-    out.play(*item);
+    if (!item->event) continue;
+    const std::int64_t delay = timing::mono_ms() - item->created_ms;
+    std::visit(
+        [&](auto& e) {
+          // Capture -> send latency, for events that come from a camera frame (faults do not).
+          if constexpr (std::is_same_v<std::decay_t<decltype(e)>, s::FaultEvent>) c.emit(e, 0);
+          else c.emit(e, item->created_ms);
+        },
+        *item->event);
+    BRIM_LOGI("cue", "CUE [%s] \"%s\" (event->send %lld ms)", audio::to_string(item->priority), item->text.c_str(),
+              static_cast<long long>(delay));
   }
 }
 
@@ -487,7 +477,7 @@ void health_loop(Ctx& c, const char* camera_name, const char* detector_name) {
                                                           : s::ComponentState::Down,
              std::string(detector_name) + ", " + std::to_string(c.stats.tracks.load()) + " tracks"),
         comp("safety", s::ComponentState::Stub),
-        comp("audio", s::ComponentState::Stub, "log output"),
+        comp("speech", s::ComponentState::Ok, "spoken by the phone app"),
         comp("ipc", s::ComponentState::Ok, std::string(ipc::backend_name()) + ", dropped " + std::to_string(c.bus->dropped())),
     };
     c.emit(h, 0);
@@ -530,17 +520,11 @@ void command_loop(Ctx& c) {
                   cmd.settings->announce_people ? "on" : "off", cmd.settings->announce_obstacles ? "on" : "off",
                   static_cast<long long>(cmd.settings->info_min_interval_s));
         break;
-      case s::CommandKind::SpeakPairingPin: {
-        const std::string digits = cmd.pin ? spell_digits(*cmd.pin) : "";
-        if (digits.empty()) {
-          BRIM_LOGW("cmd", "speak_pairing_pin without a PIN, ignored");
-          break;
-        }
-        // Nav priority: the wearer is waiting to hear it, but a real warning still comes first.
-        c.say(audio::Priority::Nav, "Pairing code " + digits, timing::mono_ms());
-        BRIM_LOGI("cmd", "speaking pairing code in the earpiece");
+      case s::CommandKind::SpeakPairingPin:
+        // The Pi has no audio; the PIN is on the dashboard. Never forward it to the phone stream:
+        // that would let any phone already listening read it.
+        BRIM_LOGW("cmd", "speak_pairing_pin ignored: the Pi plays no sound, the PIN is on the dashboard");
         break;
-      }
     }
   }
 }
@@ -597,9 +581,6 @@ int main(int argc, char** argv) {
   dcfg.phone_min_confidence = static_cast<float>(c.safety.phone_min_confidence);
   auto det = use_hw ? detect::make_tflite_detector(dcfg) : detect::make_stub_detector();
   auto safety_mon = use_hw ? safety::make_vision_safety_monitor(c.safety, c.nav) : safety::make_stub_safety_monitor();
-  auto audio_out = use_hw ? audio::make_qnx_audio_out(c.app.audio_dir) : audio::make_log_audio_out();
-  std::unique_ptr<audio::VoiceActivity> vad = fake ? std::unique_ptr<audio::VoiceActivity>(new FakeVad) : audio::make_stub_vad();
-  c.audio = audio_out.get();
   c.apply_settings(config::default_settings());  // until app_server sends the stored ones
 
   if (!cam->open()) {
@@ -607,7 +588,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   // A detector that will not load is not a reason to die in a restart loop: keep running so the
-  // pipeline sees det->healthy() == false and speaks "Brim cannot see" (cannot-fail rule).
+  // pipeline sees det->healthy() == false and the phone says "Brim cannot see" (cannot-fail rule).
   if (!det->load()) BRIM_LOGE("brim", "detector %s failed to load: running degraded, fault will be spoken", det->name());
 
   BRIM_LOGI("brim", "started (mode=%s, ipc=%s, camera=%s, detect=%s)", fake ? "fake" : "real", ipc::backend_name(), cam->name(),
@@ -617,7 +598,7 @@ int main(int argc, char** argv) {
   // TODO(qnx-check): pin the pipeline thread to its own core and raise its priority
   //   (pthread_setschedparam SCHED_RR; ThreadCtl(_NTO_TCTL_RUNMASK) for affinity on QNX).
   std::thread t_pipe(pipeline_loop, std::ref(c), std::ref(*cam), std::ref(*det), std::ref(*safety_mon), hang_after_ms);
-  std::thread t_speak(speaker_loop, std::ref(c), std::ref(*audio_out), std::ref(*vad));
+  std::thread t_cues(cue_loop, std::ref(c));
   std::thread t_health(health_loop, std::ref(c), cam->name(), det->name());
   std::thread t_hb(heartbeat_loop, std::ref(c), std::ref(supervisor_bus));
   std::thread t_cmd(command_loop, std::ref(c));
@@ -625,7 +606,7 @@ int main(int argc, char** argv) {
   while (!g_stop) timing::sleep_ms(100);
   BRIM_LOGI("brim", "stopping");
   t_pipe.join();
-  t_speak.join();
+  t_cues.join();
   t_health.join();
   t_hb.join();
   t_cmd.join();

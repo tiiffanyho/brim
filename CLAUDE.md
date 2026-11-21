@@ -25,10 +25,11 @@ runs on embedded hardware (not cloud).
 - **No cloud services and no internet at runtime.** The only network is the local Wi-Fi link to our
   own phone app. **No recording**: frames live in memory only, never written to disk.
 - Hardware is only: Pi 5 8 GB + Active Cooler (QNX 8.0 on microSD), Logitech C270 USB webcam with
-  built-in mic (blue USB 3.0 port), one USB earpiece, USB-C power bank, HDMI monitor for the demo
-  dashboard. **No distance sensor**: the camera is the only way to see an obstacle, so every
+  built-in mic (blue USB 3.0 port), USB-C power bank, HDMI monitor for the demo dashboard. **The Pi
+  plays no sound**: it sends short text events and the phone app speaks them. **No distance sensor**: the camera is the only way to see an obstacle, so every
   obstacle and proximity call is an estimate from the image (box area fraction). There is no display
-  on the hat — the wearer hears the pairing PIN in the earpiece.
+  on the hat — the pairing PIN is shown only on the HDMI dashboard (a helper reads it out) and is
+  never sent to phones.
 - **Never give a direction we are not sure of.** When the path is unclear, say "Path unclear, stop".
 - QNX is POSIX but **not Linux**: no V4L2, systemd, apt, epoll, inotify, /proc-parsing or other
   Linux-only APIs in `device/`. If unsure whether an API exists on QNX 8.0, put it behind an
@@ -46,13 +47,16 @@ runs on embedded hardware (not cloud).
   `app_server` (lowest priority, REST + WebSocket + static PWA + SQLite). brim must never block on
   app_server: publishing an event is fire-and-forget with a bounded queue.
 - brim never reads SQLite. app_server pushes what brim needs as commands: `reload_settings` carries
-  the settings, `speak_pairing_pin` carries the PIN.
+  the settings. (`speak_pairing_pin` is still in the schema but no longer sent: the PIN never
+  leaves app_server and the dashboard.)
 - IPC goes through `device/src/ipc/` only (QNX message passing on the Pi, Unix sockets on the laptop).
 - Every event carries `t_mono_ms` (CLOCK_MONOTONIC at emit time) so we can measure delay. Log
   capture, detection, decision and speak-start times; fail loudly with a spoken fault, then recover.
-- Speech priority: **safety > navigation > info** (people, obstacles). Info waits for silence,
-  expires after 3 s, and is rate-limited to one per `info_min_interval_s` (≥ 10 s). A direction is
-  never spoken before the warning that made it necessary.
+- Speech priority: **safety > navigation > info** (people, obstacles). On the Pi, `SpeakQueue`
+  sends cue events in that order (faults go with safety); stale nav/info (> 3 s) is dropped and info
+  is rate-limited to one per `info_min_interval_s` (≥ 10 s). On the phone, safety_alert goes to the
+  assertive live region at once, clear_path as soon as the warning before it has been read, and the
+  rest waits for silence. A direction is never spoken before the warning that made it necessary.
 - Stubs are marked `TODO(hw)` (needs real hardware), `TODO(qnx-check)` (verify API on QNX),
   `TODO(ai)` (model work). Grep for these before a demo.
 

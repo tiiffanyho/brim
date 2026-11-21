@@ -9,8 +9,9 @@ activity, alerts, settings and device health.
 
 **Everything runs on the hat: no cloud, no internet, no recording, and no face recognition.**
 
-> Status: **skeleton + pipelines**. All plumbing works end to end with fake data; camera, AI models
-> and audio are stubs marked `TODO(hw)`, `TODO(ai)` and `TODO(qnx-check)`.
+> Status: **skeleton + pipelines**. All plumbing works end to end with fake data; camera and AI
+> models are stubs marked `TODO(hw)`, `TODO(ai)` and `TODO(qnx-check)`. The Pi plays no sound:
+> the phone app speaks.
 
 ## Privacy, in one paragraph
 
@@ -31,13 +32,13 @@ the build if an identity field reappears in the schema.
  │     ▼                                                                             │
  │  brim (prio 20)                                                                   │
  │   capture → detect (people + objects, anon tracks) → safety → nav                 │
- │                                     │           └──► SpeakQueue ──► earpiece      │
- │                                     │               safety > nav > info           │
+ │                                     │           └──► SpeakQueue (cues) ──┐        │
+ │                                     │               safety > nav > info  │        │
  │                                     ▼                                             │
  │                       EventBus (QNX MsgSend / pulses)                             │
  │                                     ▼                                             │
  │  app_server (prio 8): validate → SQLite → WebSocket / REST / static PWA (lws)     │
- │                       ──commands──► brim: reload_settings, speak_pairing_pin      │
+ │                       ──commands──► brim: reload_settings                         │
  └─────────────────────────────────────┬─────────────────────────────────────────────┘
                                        │ local Wi-Fi only, PIN pairing + HttpOnly cookie
                                  Phone PWA (Activity · Alerts · Settings · Health)
@@ -54,7 +55,8 @@ the build if an identity field reappears in the schema.
   `name_attach`/`MsgSendv`/`MsgSendPulse`; on the laptop it uses Unix datagram sockets.
   brim never blocks on app_server: publishing goes into a bounded queue that drops the oldest event when full.
 - **brim never reads SQLite.** app_server sends it the saved settings (and re-sends them after a
-  restart) and the pairing PIN, which brim speaks in the earpiece — there is no display on the hat.
+  restart). The pairing PIN stays in app_server and is shown only on the HDMI dashboard — there is
+  no display on the hat, and the Pi plays no sound.
 - **Every event carries `t_mono_ms`** (CLOCK_MONOTONIC). app_server stamps `t_relay_mono_ms`, and
   Device health shows the camera→event and internal relay delays.
 
@@ -68,10 +70,12 @@ scripts/dev.sh
 ```
 
 That generates the types, builds and unit-tests the device code, then starts app_server, the
-supervisor with `brim --fake`, and Vite. It prints a URL and a **6-digit PIN** (the same PIN brim
-"speaks" — look for `SAY [nav] "Pairing code …"` in the log). Open the URL (or the LAN URL on your
+supervisor with `brim --fake`, and Vite. It prints a URL and a **6-digit PIN** (on the Pi it is on the
+HDMI dashboard). Open the URL (or the LAN URL on your
 phone, on the same Wi-Fi) and enter the PIN. You'll see safety warnings, directions, people,
-obstacles and health arriving live. The screen reader hears them through ARIA live regions.
+obstacles and health arriving live. The phone speaks through two ARIA live regions read by
+VoiceOver / TalkBack: safety alerts in the assertive one (they interrupt), everything else in the
+polite one. If health events stop for 3 s the phone says "Connection lost", then "Connected again".
 
 Things to try:
 
@@ -94,9 +98,9 @@ BRIM_PI_HOST=192.168.1.42 scripts/deploy.sh   # BRIM_PI_USER (root), BRIM_PI_DIR
 ```
 
 `deploy.sh` cross-compiles with the `qnx-aarch64le` preset and builds the PWA. It copies the
-binaries, `app/dist`, config, migrations, models and audio over scp, then runs `scripts/pi/start.sh`
-over ssh. On the Pi, open `http://<pi-ip>:8080` and pair with the PIN the earpiece says (it is also
-in `/tmp/brim/pairing.txt` and on the HDMI dashboard).
+binaries, `app/dist`, config, migrations and models over scp, then runs `scripts/pi/start.sh`
+over ssh. On the Pi, open `http://<pi-ip>:8080` and pair with the PIN on the HDMI dashboard (it is also
+in `/tmp/brim/pairing.txt`).
 
 ## Repo layout
 
@@ -105,7 +109,8 @@ shared/       events.schema.json, gen/ (generator + generated TS/C++), examples/
 device/       C++17 + CMake. Presets: host, qnx-aarch64le (cmake/qnx-aarch64le.cmake)
   src/common  json, logging, timing/deadlines, config, sysinfo, event stamping
   src/ipc     EventBus: bus_qnx.cpp (Pi) | bus_uds.cpp (laptop)
-  src/capture src/detect src/safety src/audio      pipeline modules (stubs + interfaces)
+  src/capture src/detect src/safety src/nav  pipeline modules
+  src/audio   SpeakQueue: cue events to the phone in priority order (the Pi plays no sound)
   src/brim_main.cpp        pipeline wiring + --fake scenario
   src/supervisor/          heartbeat, restart, fault events, watchdog interface
   src/app_server/          lws server, REST router (api.cpp), relay, SQLite (db.cpp), pairing
@@ -114,8 +119,8 @@ device/       C++17 + CMake. Presets: host, qnx-aarch64le (cmake/qnx-aarch64le.c
 app/          Vite + React + TS PWA: src/api, src/screens, src/a11y; public/ manifest + service worker
 data/migrations/  versioned SQLite schema (PRAGMA user_version)
 config/       safety.json (close/confidence thresholds), nav.json (clear-path thresholds), app.json
-models/ audio/    on-device models and pre-rendered speech (see their READMEs)
-scripts/      dev.sh, deploy.sh, smoke_test.sh, fake_events.py, make_audio.sh, pi/start.sh, pi/stop.sh
+models/       on-device models (see models/README.md)
+scripts/      dev.sh, deploy.sh, smoke_test.sh, fake_events.py, probe_model.py, pi/start.sh, pi/stop.sh
 ```
 
 `src/nav` (the clear-path decision) is the next phase; until it exists brim says nothing about

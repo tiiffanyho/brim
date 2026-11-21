@@ -97,4 +97,21 @@ describe("EventStream", () => {
     vi.advanceTimersByTime(60_000);
     expect(FakeWS.instances).toHaveLength(1);
   });
+
+  it("forceReconnect() drops a socket that looks open but is dead, and connects again now", () => {
+    const { s, events, statuses } = make();
+    s.start();
+    const dead = FakeWS.instances[0]!;
+    dead.open();
+    s.forceReconnect();
+    expect(FakeWS.instances).toHaveLength(2);
+    expect(statuses.slice(-2)).toEqual(["closed", "connecting"]);
+    // The old socket's late messages and close are ignored.
+    dead.onmessage?.({ data: JSON.stringify({ type: "health" }) });
+    expect(dead.onclose).toBeNull();
+    FakeWS.instances[1]!.open();
+    expect(statuses.at(-1)).toBe("open");
+    expect(events).toHaveLength(0);
+    s.stop();
+  });
 });

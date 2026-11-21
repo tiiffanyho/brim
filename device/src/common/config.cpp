@@ -63,7 +63,6 @@ AppConfig load_app(const std::string& path) {
   }
   a.data_dir = j->get_string("data_dir", a.data_dir);
   a.run_dir = j->get_string("run_dir", a.run_dir);
-  a.audio_dir = j->get_string("audio_dir", a.audio_dir);
   a.models_dir = j->get_string("models_dir", a.models_dir);
   a.http_port = static_cast<int>(j->get_int("http_port", a.http_port));
   a.capture_fps = static_cast<int>(j->get_int("capture_fps", a.capture_fps));

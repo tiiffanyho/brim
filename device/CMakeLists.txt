@@ -64,7 +64,6 @@ add_library(brim_pipeline STATIC
   src/safety/safety_monitor.cpp
   src/nav/nav.cpp
   src/audio/speak_queue.cpp
-  src/audio/audio_out.cpp
 )
 target_link_libraries(brim_pipeline PUBLIC brim_common)
 if(BRIM_WITH_TFLITE)

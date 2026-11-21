@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end smoke test on the laptop (also run in CI):
-#   app_server + supervisor -> brim --fake, then: pairing, the PIN spoken in the earpiece, live
-#   WebSocket events (all six types), a forced pipeline hang -> supervisor restart -> fault events,
-#   settings pushed to brim, and the REST history with no identity in it.
+#   app_server + supervisor -> brim --fake, then: pairing, the PIN on the dashboard only (the Pi
+#   plays no sound), live WebSocket cues (all six types) in priority order, a forced pipeline hang
+#   -> supervisor restart -> fault events, settings pushed to brim, and the REST history with no
+#   identity in it.
 # Usage: scripts/smoke_test.sh   (after: cmake --preset host && cmake --build --preset host)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -41,24 +42,25 @@ code=$(curl -s -c "$JAR" -o /dev/null -w '%{http_code}' -X POST -d "{\"pin\":\"$
 grep -q '#HttpOnly_' "$JAR" && pass "cookie is HttpOnly" || fail "cookie not HttpOnly"
 COOKIE="brim_session=$(awk '/brim_session/{print $7}' "$JAR")"
 
-echo "the wearer hears the PIN (no display on the hat)"
-wait_for "$DATA/sup.log" "SAY \[nav\] \"Pairing code $(echo "$PIN" | sed 's/./& /g;s/ $//')\"" \
-  && pass "brim spoke the pairing code, digit by digit" || fail "brim did not speak the PIN"
-wait_for "$DATA/app.log" "brim has the pairing PIN" \
-  && pass "app_server confirmed brim took the PIN" || fail "PIN handshake not confirmed"
+echo "the PIN is on the dashboard only (the Pi plays no sound)"
+grep -q "PAIRING PIN: $PIN" "$DATA/app.log" && pass "dashboard shows the PIN" || fail "PIN not on the dashboard"
+wait_for "$DATA/app.log" "brim has the saved settings" \
+  && pass "app_server handed brim the saved settings" || fail "settings handshake not confirmed"
+grep -q "$PIN" "$DATA/sup.log" && fail "the PIN reached brim's log" || pass "the PIN never reaches brim or the event stream"
 
 echo "settings reach brim with the settings in the command"
 curl -s -b "$JAR" $API/settings >"$DATA/settings.json"
-NEW=$(json 's=>{s.volume=55;s.info_min_interval_s=20;s.announce_obstacles=false;return JSON.stringify(s)}' <"$DATA/settings.json")
+# Leave people/obstacles on: they now gate whether those cues are sent at all.
+NEW=$(json 's=>{s.volume=55;s.speech_rate=1.25;return JSON.stringify(s)}' <"$DATA/settings.json")
 code=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' -d "$NEW" $API/settings)
 [[ $code == 200 ]] && pass "PUT /settings -> 200" || fail "PUT /settings -> $code"
-wait_for "$DATA/sup.log" "reload_settings applied (volume=55, rate=1.00, people=on, obstacles=off, info_min_interval=20s)" \
+wait_for "$DATA/sup.log" "reload_settings applied (volume=55, rate=1.25, people=on, obstacles=on, info_min_interval=10s)" \
   && pass "brim applied the settings it was sent" || fail "brim did not apply the settings"
 code=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' \
   -d "$(json 's=>{s.info_min_interval_s=5;return JSON.stringify(s)}' <"$DATA/settings.json")" $API/settings)
 [[ $code == 400 ]] && pass "an interval under 10 s is refused" || fail "bad interval -> $code"
 
-echo "live events over WebSocket (25 s, includes a forced brim hang at 8 s)"
+echo "live cues over WebSocket (30 s, includes a forced brim hang at 8 s)"
 ( sleep 8; pkill -USR1 -x brim || true ) &
 node --input-type=module -e '
 const ws = new WebSocket(process.argv[1], { protocols: ["brim-events"], headers: { cookie: process.argv[2] } });
@@ -68,7 +70,7 @@ ws.onmessage = (m) => { const e = JSON.parse(m.data); seen[e.type] = (seen[e.typ
   if (e.type === "fault") console.log("    fault:", e.action, e.message);
   if (e.type === "clear_path") console.log("    path:", e.clear ? e.direction : "unclear", "-", e.text); };
 ws.onerror = () => { console.log("WSERR"); process.exit(1); };
-setTimeout(() => { console.log(JSON.stringify({ seen, maxDelay })); process.exit(0); }, 25000);
+setTimeout(() => { console.log(JSON.stringify({ seen, maxDelay })); process.exit(0); }, 30000);
 ' "ws://127.0.0.1:$PORT/ws" "$COOKIE" >"$DATA/ws.out" || true
 grep -E "^    (fault|path):" "$DATA/ws.out" | head -8 || true
 RES=$(tail -1 "$DATA/ws.out")
@@ -77,6 +79,10 @@ for t in person_seen obstacle_seen clear_path safety_alert health fault; do
   echo "$RES" | grep -q "\"$t\"" && pass "received $t" || fail "no $t event"
 done
 grep -q "Path unclear, stop" "$DATA/ws.out" && pass "says 'Path unclear, stop' instead of guessing" || fail "no path-unclear decision"
+# Same tick: the warning and its direction. The warning must leave first.
+grep -A1 'CUE \[safety\] "Person close ahead"' "$DATA/sup.log" | grep -q 'CUE \[nav\]' \
+  && pass "a direction is sent right after the warning that made it necessary" || fail "cue order wrong"
+grep -q "SAY \[" "$DATA/sup.log" && fail "brim still plays audio" || pass "brim plays no audio (cues only)"
 grep -q "restarting brim" "$DATA/sup.log" && pass "supervisor restarted hung brim" || fail "no restart"
 grep -q "brim recovered" "$DATA/sup.log" && pass "brim recovered" || fail "no recovery"
 wait_for "$DATA/app.log" "re-sent the saved settings to brim after restart" \

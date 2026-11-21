@@ -3,7 +3,7 @@
 #   1. regenerate schema types   2. build + unit-test device code (host preset)
 #   3. app_server (REST/WS/SQLite)   4. supervisor -> brim --fake
 #   5. Vite dev server for the PWA (proxies /api and /ws to app_server)
-# Open the printed URL, enter the printed PIN (brim also "speaks" it — look for SAY in this log),
+# Open the printed URL, enter the printed PIN (on the Pi it is on the HDMI dashboard),
 # and watch safety warnings, directions, people, obstacles and health arrive.
 #
 # Env: BRIM_PORT (app_server, default 8080)  BRIM_VITE_PORT (default 5173)
@@ -78,7 +78,7 @@ cat <<MSG
      Brim dev is running
      Laptop:  http://localhost:$VITE_PORT
      Phone:   http://${LAN_IP:-<laptop-ip>}:$VITE_PORT   (same Wi-Fi)
-     PIN:     $PIN   (brim speaks it in the earpiece; "SAY [nav]" above)
+     PIN:     $PIN   (on the Pi: HDMI dashboard only; the phone does the talking)
      Demo:    kill -USR1 \$(pgrep -x brim)   -> supervisor restarts it
      Extra:   scripts/fake_events.py        -> more random events
      Ctrl-C stops everything.

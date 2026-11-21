@@ -67,7 +67,7 @@ class Sender:
                    "cpu_pct": round(random.uniform(30, 55), 1), "temp_c": round(random.uniform(48, 61), 1),
                    "pipeline_latency_ms": round(random.uniform(35, 70), 1), "speak_queue_len": random.randint(0, 2),
                    "components": [{"name": n, "state": "stub", "detail": "fake_events.py"} for n in
-                                  ("capture", "detect", "safety", "audio")]})
+                                  ("capture", "detect", "safety", "speech")]})
 
 
 def random_event(s: Sender) -> None:

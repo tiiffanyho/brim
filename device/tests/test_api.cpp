@@ -1,4 +1,6 @@
 // REST API tests through the transport-independent router (no sockets needed).
+#include <unistd.h>  // mkdtemp (macOS declares it here, not in <cstdlib>)
+
 #include <cstdlib>
 #include <string>
 
@@ -102,14 +104,6 @@ TEST_CASE("settings: validation, and the reload command carries the settings") {
   CHECK_EQ(cmd.settings->volume, 40);
   CHECK_EQ(cmd.settings->info_min_interval_s, 30);
   CHECK(!cmd.settings->announce_obstacles);
-}
-
-TEST_CASE("the pairing-PIN command tells brim what to speak") {
-  auto c = speak_pairing_pin_command("048275");
-  CHECK(c.command == schema::CommandKind::SpeakPairingPin);
-  REQUIRE(c.pin.has_value());
-  CHECK_EQ(*c.pin, "048275");
-  CHECK(!c.settings.has_value());
 }
 
 TEST_CASE("relay: valid events are stamped and stored, invalid dropped") {

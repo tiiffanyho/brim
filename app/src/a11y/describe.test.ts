@@ -5,32 +5,41 @@ import { Deduper, describeEvent, obstacleWords, relativeTime } from "./describe"
 const base = { seq: 1, source: "brim", t_mono_ms: 1 };
 
 describe("describeEvent", () => {
-  it("announces safety alerts assertively, critical ones with a warning word", () => {
+  it("says every safety alert assertively, as a short phrase", () => {
     const e: BrimEvent = { ...base, type: "safety_alert", kind: "person_close", severity: "critical", text: "Person close ahead", direction: "ahead" };
     expect(describeEvent(e)?.politeness).toBe("assertive");
-    expect(describeEvent(e)?.text).toBe("Warning: Person close ahead.");
-    expect(describeEvent({ ...e, severity: "info" })?.politeness).toBe("polite");
+    expect(describeEvent(e)?.tier).toBe("alert");
+    expect(describeEvent(e)?.text).toBe("Person close ahead.");
+    expect(describeEvent({ ...e, severity: "info" })?.politeness).toBe("assertive");
   });
 
   it("announces a phone pointed at the wearer", () => {
     const a = describeEvent({ ...base, type: "safety_alert", kind: "phone_raised", severity: "warning", text: "A phone is pointed at you", direction: "ahead" });
-    expect(a).toEqual({ text: "A phone is pointed at you.", politeness: "assertive", key: "safety:phone_raised:A phone is pointed at you" });
+    expect(a).toEqual({
+      text: "A phone is pointed at you.",
+      politeness: "assertive",
+      tier: "alert",
+      key: "safety:phone_raised:A phone is pointed at you",
+    });
   });
 
-  it("announces the safest direction, and 'stop' assertively when there is none", () => {
+  it("says the safest direction, or 'stop' when there is none, in the polite region at nav priority", () => {
     expect(describeEvent({ ...base, type: "clear_path", clear: true, direction: "right", text: "Chair ahead, step right" })).toEqual({
       text: "Chair ahead, step right.",
       politeness: "polite",
+      tier: "nav",
       key: "path:right",
     });
     const stop = describeEvent({ ...base, type: "clear_path", clear: false, direction: "unknown", text: "Path unclear, stop" });
-    expect(stop?.politeness).toBe("assertive");
+    expect(stop?.text).toBe("Path unclear, stop.");
+    expect(stop?.politeness).toBe("polite");
+    expect(stop?.tier).toBe("nav");
     expect(stop?.key).toBe("path:unclear");
   });
 
   it("says where a person is without saying who they are", () => {
     const a = describeEvent({ ...base, type: "person_seen", track_id: 4, direction: "left", proximity: "close", confidence: 0.9 });
-    expect(a).toEqual({ text: "Person on your left, close by.", politeness: "polite", key: "person:4" });
+    expect(a).toEqual({ text: "Person on your left, close by.", politeness: "polite", tier: "info", key: "person:4" });
     expect(JSON.stringify(a)).not.toMatch(/name/i);
   });
 
@@ -56,16 +65,28 @@ describe("describeEvent", () => {
     ).toBeNull();
   });
 
-  it("announces restarts and recovery", () => {
-    expect(describeEvent({ ...base, type: "fault", component: "brim", action: "restarting", message: "x" })?.text).toMatch(/restarting/);
-    expect(describeEvent({ ...base, type: "fault", component: "brim", action: "recovered", message: "x" })?.text).toMatch(/working again/);
+  it("says faults in a few words", () => {
+    expect(describeEvent({ ...base, type: "fault", component: "brim", action: "restarting", message: "heartbeat missed for 1137 ms" })?.text).toBe(
+      "Brim is restarting.",
+    );
+    expect(describeEvent({ ...base, type: "fault", component: "brim", action: "recovered", message: "x" })?.text).toBe("Brim is working again.");
+    const blind = describeEvent({ ...base, type: "fault", component: "detect", action: "degraded", message: "Brim cannot see. Stop" });
+    expect(blind).toMatchObject({ text: "Brim cannot see. Stop.", politeness: "polite", tier: "status" });
+    const long = describeEvent({
+      ...base,
+      type: "fault",
+      component: "camera",
+      action: "degraded",
+      message: "frame rate dropped below the configured minimum for a while",
+    });
+    expect(long?.text).toBe("Brim has a problem.");
   });
 });
 
 describe("Deduper", () => {
   it("suppresses the same key within the window", () => {
     const d = new Deduper(30_000);
-    const a = { text: "Person on your left, close by.", politeness: "polite" as const, key: "person:1" };
+    const a = { text: "Person on your left, close by.", politeness: "polite" as const, tier: "info" as const, key: "person:1" };
     expect(d.shouldAnnounce(a, 0)).toBe(true);
     expect(d.shouldAnnounce(a, 10_000)).toBe(false);
     expect(d.shouldAnnounce(a, 40_001)).toBe(true);
