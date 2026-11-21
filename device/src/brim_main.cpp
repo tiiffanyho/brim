@@ -21,6 +21,7 @@
 // Flags: --fake            scripted fake events, no hardware (laptop default via scripts/dev.sh)
 //        --hang-after <s>  demo: freeze the pipeline after s seconds (supervisor must restart us)
 //        SIGUSR1           demo: freeze the pipeline now
+#include <atomic>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -73,6 +74,7 @@ struct Ctx {
   audio::SpeakQueue* speak = nullptr;
   audio::AudioOut* audio = nullptr;
   Stats stats;
+  std::atomic<bool> detect_healthy{true};  // written by the pipeline, read by the health thread
 
   template <class E>
   void emit(E& e, std::int64_t capture_ms) {
@@ -248,7 +250,9 @@ class FakeVad final : public audio::VoiceActivity {
 void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::SafetyMonitor& safety_mon,
                    std::int64_t hang_after_ms) {
   FakeScenario fake(c);
-  detect::TrackStore tracks(c.safety.track_forget_s * 1000, c.safety.repeat_suppress_s * 1000);
+  detect::TrackStore tracks(c.safety.track_forget_s * 1000, c.safety.repeat_suppress_s * 1000,
+                            static_cast<float>(c.detect.track_match_iou), c.detect.track_match_window_ms,
+                            static_cast<float>(c.detect.track_center_gate));
   capture::Frame frame;
   std::int64_t start = timing::mono_ms();
   std::int64_t fps_window_start = start;
@@ -281,8 +285,9 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       continue;
     }
 
-    // Real path (the models are stubs today; see TODO(ai) in each module).
+    // Real path: TFLite detector on the Pi (safety and nav models are still TODO(ai)).
     // Cannot-fail rule: a sick detector is spoken out loud, not hidden. We never infer "clear".
+    c.detect_healthy = det.healthy();
     if (!det.healthy() || !safety_mon.healthy()) {
       if (detect_was_healthy) {
         detect_was_healthy = false;
@@ -293,7 +298,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
         c.emit(f, 0);
         c.say(audio::Priority::Safety, "Brim cannot see. Stop and ask for help", now);
       }
-    } else if (!detect_was_healthy) {
+    } else if (!detect_was_healthy) {  // recovered
       detect_was_healthy = true;
       s::FaultEvent f;
       f.component = "detect";
@@ -315,6 +320,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
     }
 
     // 2. Navigation: the safest direction to move, or "Path unclear, stop".
+    // `dets` holds this frame's people, obstacles and phones, each with a track id.
     // TODO(ai): src/nav turns `dets` + NavThresholds into a ClearPathEvent and speaks it at
     //   Priority::Nav, right after the safety alert that made it necessary. Until it exists brim
     //   says nothing about direction rather than guessing one (rule: never give a direction we are
@@ -354,7 +360,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       }
     }
     tracks.expire(now);
-    c.stats.tracks = static_cast<std::int64_t>(tracks.size());
+    c.stats.tracks = static_cast<std::int64_t>(tracks.active(now));
   }
 }
 
@@ -391,7 +397,10 @@ void health_loop(Ctx& c, const char* camera_name, const char* detector_name) {
     h.components = {
         comp("pipeline", pipeline_live ? s::ComponentState::Ok : s::ComponentState::Down, c.fake ? "fake mode" : ""),
         comp("capture", c.fake ? s::ComponentState::Stub : s::ComponentState::Ok, camera_name),
-        comp("detect", s::ComponentState::Stub,
+        comp("detect",
+             c.fake || !std::strcmp(detector_name, "stub") ? s::ComponentState::Stub
+             : c.detect_healthy.load()                    ? s::ComponentState::Ok
+                                                          : s::ComponentState::Down,
              std::string(detector_name) + ", " + std::to_string(c.stats.tracks.load()) + " tracks"),
         comp("safety", s::ComponentState::Stub),
         comp("audio", s::ComponentState::Stub, "log output"),
@@ -504,10 +513,13 @@ int main(int argc, char** argv) {
   c.audio = audio_out.get();
   c.apply_settings(config::default_settings());  // until app_server sends the stored ones
 
-  if (!cam->open() || !det->load()) {
-    BRIM_LOGE("brim", "module init failed");  // supervisor will restart us
+  if (!cam->open()) {
+    BRIM_LOGE("brim", "camera init failed");  // supervisor will restart us
     return 1;
   }
+  // A detector that will not load is not a reason to die in a restart loop: keep running so the
+  // pipeline sees det->healthy() == false and speaks "Brim cannot see" (cannot-fail rule).
+  if (!det->load()) BRIM_LOGE("brim", "detector %s failed to load: running degraded, fault will be spoken", det->name());
 
   BRIM_LOGI("brim", "started (mode=%s, ipc=%s, camera=%s, detect=%s)", fake ? "fake" : "real", ipc::backend_name(), cam->name(),
             det->name());
