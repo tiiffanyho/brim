@@ -6,7 +6,6 @@ export default defineConfig({
   resolve: {
     alias: {
       "@schema": path.resolve(__dirname, "../shared/gen/events.ts"),
-      "@web": path.resolve(__dirname, "../app/src"),
     },
   },
   test: { include: ["src/**/*.test.ts"] },

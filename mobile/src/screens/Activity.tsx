@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { Text } from "react-native";
 import type { ActivityItem } from "@schema";
-import { directionWords, obstacleWords, proximityWords, relativeTime } from "@web/a11y/describe";
+import { directionWords, obstacleWords, proximityWords, relativeTime } from "../core/describe";
 import { errorText } from "../api";
 import { useBrim, useLiveEvents } from "../BrimContext";
 import { Body, ErrorText, Loading, Screen, styles, useColors } from "../ui";

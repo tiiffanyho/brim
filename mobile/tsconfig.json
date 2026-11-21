@@ -5,8 +5,7 @@
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "paths": {
-      "@schema": ["../shared/gen/events.ts"],
-      "@web/*": ["../app/src/*"]
+      "@schema": ["../shared/gen/events.ts"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx", "../shared/gen/events.ts"]

@@ -1,14 +1,14 @@
-// App-wide state for the native app. Same event handling as the web app (app/src/state.tsx):
-// the shared describeEvent / Deduper / SpeechScheduler / HealthWatch / EventStream decide what is
+// App-wide state for the native app. Same event handling as the web app's state.tsx: describeEvent /
+// Deduper / SpeechScheduler / HealthWatch / EventStream (our own copies in src/core/) decide what is
 // said and when; the difference is that here it is spoken by the phone itself (src/voice.ts) and
 // keeps working in the background.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AccessibilityInfo, AppState } from "react-native";
 import type { BrimEvent, FaultEvent, HealthEvent, HealthResponse, Settings } from "@schema";
-import { Deduper, describeEvent } from "@web/a11y/describe";
-import { HealthWatch, SpeechScheduler, type Tier } from "@web/a11y/speech";
-import { EventStream, type StreamStatus } from "@web/api/ws";
+import { Deduper, describeEvent } from "./core/describe";
+import { HealthWatch, SpeechScheduler, type Tier } from "./core/speech";
+import { EventStream, type StreamStatus } from "./core/ws";
 import { ApiError, makeApi, wsUrlFor, type HatApi } from "./api";
 import { say, setVoice, startOnDuty, stopOnDuty } from "./voice";
 

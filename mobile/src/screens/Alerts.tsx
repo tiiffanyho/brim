@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { Text } from "react-native";
 import type { Alert } from "@schema";
-import { relativeTime } from "@web/a11y/describe";
+import { relativeTime } from "../core/describe";
 import { errorText } from "../api";
 import { useBrim, useLiveEvents } from "../BrimContext";
 import { Body, ErrorText, Loading, Screen, styles, useColors } from "../ui";

@@ -10,7 +10,7 @@
 //   warnings keep coming. The simulator does not suspend apps like a real device does.
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from "expo-audio";
 import * as Speech from "expo-speech";
-import type { Politeness } from "@web/a11y/describe";
+import type { Politeness } from "./core/describe";
 
 const silence = require("../assets/silence.wav") as number;
 
