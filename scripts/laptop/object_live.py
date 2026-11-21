@@ -9,7 +9,7 @@ is spoken and no phrase is added.
 
     .dev/venv/bin/pip install "ai-edge-litert==1.2.0" numpy pillow "opencv-python==4.12.0.88"
     .dev/venv/bin/python scripts/laptop/object_live.py --list        # which camera is the C270?
-    .dev/venv/bin/python scripts/laptop/object_live.py --camera 0
+    .dev/venv/bin/python scripts/laptop/object_live.py --camera 0 --say   # speaks, for testing eyes-closed
 
 Keys (click the window first): press the key for what is really in front of the camera; frames are
 scored against it until you press another.
@@ -21,6 +21,13 @@ Per class: detected on >= 85% of its frames; false alarms <= 1 in 20 "none" fram
 never an obstacle. Frames next to each other look alike, so move: change distance, angle and light.
 Vehicles parked or on private property only, never on a public road or near traffic.
 
+--say speaks on the Mac what the hat's phone app would say, in the hat's own words ("Person on
+your left, close by.", "Chair ahead, nearby.", "Something on your right."): people are only ever
+"Person", never a name; far things and phones are not said, as on the hat. By default at the
+hat's pace (one every info_min_interval_s, 10 s); --say-every 3 is faster for testing (not the hat).
+It also says each label key ("Labelling chair") and the result when you quit. (On the hat the Pi
+plays no sound: the phone speaks. This is only so a blind tester can run the test.)
+
 Privacy: frames live in memory only. Nothing is saved, recorded or uploaded; only counts are kept.
 """
 from __future__ import annotations
@@ -28,6 +35,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -47,6 +56,77 @@ KEY_CLASS = {"p": "person", "b": "bicycle", "c": "car", "m": "motorcycle", "u": 
 MIN_SECONDS = 5.0  # less than this per class and the summary says so
 HELP = ["p person b bicycle c car m motorcycle u bus t truck h chair",
         "d table f phone e bench k backpack s suitcase o couch n none  space off  q quit"]
+
+
+# The phone's words (app/src/a11y/describe.ts): never a name, never identity.
+SUBJECT = {"Person": "Person", "Chair": "Chair", "Table": "Table", "Door": "Door", "Pole": "Pole", "Stairs": "Stairs",
+           "Vehicle": "Vehicle", "Bicycle": "Bicycle", "Obstacle": "Something"}
+DIRECTION_WORDS = {"left": "on your left", "right": "on your right", "ahead": "ahead"}
+PROXIMITY_WORDS = {"close": "close by", "near": "nearby"}
+
+
+class Speaker:
+    """Says what the hat's phone app would say about people and obstacles, using brim's own rules:
+    direction from the box centre (nav.json side_margin_frac), closeness from box area
+    (safety.json), far things and phones never said, the biggest (closest) thing first."""
+
+    def __init__(self, bc: BrimClasses, cfg: dict, enabled: bool, every_s: float) -> None:
+        from object_test import rel
+        with open(rel(cfg["safety_config"])) as f:
+            safety = json.load(f)
+        with open(rel(cfg["nav_config"])) as f:
+            nav = json.load(f)
+        self.bc = bc
+        self.margin = float(nav.get("side_margin_frac", 0.33))
+        if not 0 < self.margin < 0.5:
+            self.margin = 0.33
+        self.person_close = float(safety.get("person_close_area_frac", 0.18))
+        self.object_close = float(safety.get("object_close_area_frac", 0.22))
+        self.near = float(safety.get("near_area_frac", 0.06))
+        self.every_s = every_s if every_s > 0 else max(10.0, float(safety.get("info_min_interval_s", 10)))
+        self.enabled = enabled and shutil.which("say") is not None
+        if enabled and not self.enabled:
+            print("note: no 'say' command on this computer (macOS only); speech is off")
+        self.proc = None
+        self.last = -1e9
+
+    def phrase(self, d) -> tuple[float, str] | None:
+        thing = self.bc.mapping.get(d.class_id)
+        kind = self.bc.kinds.get(thing) if thing else None
+        if kind is None or d.score < self.bc.thr[d.class_id]:
+            return None  # phones and unmapped classes are never said as obstacles
+        cx, area = d.x + d.w / 2, d.w * d.h
+        side = "left" if cx < self.margin else "right" if cx > 1 - self.margin else "ahead"
+        close = self.person_close if thing == "Person" else self.object_close
+        prox = "close" if area >= close else "near" if area >= self.near else "far"
+        if prox == "far":
+            return None  # brim does not mention far things
+        parts = [DIRECTION_WORDS[side], PROXIMITY_WORDS[prox]]
+        return area, f"{SUBJECT.get(kind, 'Something')} {', '.join(parts)}."
+
+    def speaking(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def say(self, text: str, interrupt: bool = False) -> None:
+        print(f"           SAY  {text}")
+        if not self.enabled:
+            return
+        if interrupt and self.speaking():
+            self.proc.terminate()
+        self.proc = subprocess.Popen(["say", text])
+
+    def tick(self, dets, now: float) -> None:
+        if now - self.last < self.every_s or self.speaking():
+            return
+        said = [p for p in (self.phrase(d) for d in dets) if p]
+        if not said:
+            return
+        self.last = now
+        self.say(max(said)[1])
+
+    def close(self) -> None:
+        if self.speaking():
+            self.proc.wait(timeout=15)
 
 
 def list_cameras() -> None:
@@ -78,6 +158,7 @@ class Session:
         self.phones = 0
         self.phone_hits = Counter()   # obstacle class -> frames where its box sat on a phone
         self.all_ms = []
+        self.spoken_result = ""
 
     def add(self, label, reported: set, ms: float, dt: float, n_phones: int, hits) -> None:
         self.all_ms.append(ms)
@@ -111,6 +192,7 @@ class Session:
         print(hdr)
         print("  " + "-" * (len(hdr) - 2))
         tested, untested, ok_all = [], [], True
+        spoken = []
         for c in sorted(bc.mapping, key=lambda c: bc.name_of[c]):
             name = bc.name_of[c]
             fa = self.none_fa[name]
@@ -131,6 +213,7 @@ class Session:
             avg = sum(self.ms[name]) / n
             top = ", ".join(f"{k} {100.0 * v / n:.0f}%" for k, v in self.also.get(name, Counter()).most_common(2))
             short = "  (short: hold it longer, move around)" if self.seconds[name] < MIN_SECONDS else ""
+            spoken.append(f"{name}, {'pass' if det_ok else 'fail'}, found {100.0 * rate:.0f} percent")
             print(f"  {name:<11} {n:>6} {self.seconds[name]:>5.0f} {found:>8} {n - found:>6} {fa:>9} {avg:>6.1f}  "
                   f"{('PASS' if det_ok else 'FAIL') + f' {100.0 * rate:.0f}%':<16} {fa_txt:<22} {top}{short}")
         if n_none:
@@ -149,7 +232,11 @@ class Session:
         avg_all = sum(self.all_ms) / len(self.all_ms) if self.all_ms else float("nan")
         print(f"  detector: {avg_all:.1f} ms per frame on this laptop (the Pi budget is 30 ms; the Pi decides)")
         print()
+        self.spoken_result = ("Test finished. Overall " + ("pass. " if ok_all and n_none else "fail. ") + ". ".join(spoken)
+                              + ("." if spoken else "") + ("" if n_none else " False alarms not tested.")
+                              + ("" if phone_ok else " A phone was seen as an obstacle."))
         if not tested:
+            self.spoken_result = "Test finished. No object was labelled."
             print("OVERALL: no object labelled. Press a class key while the object is in view (and n for empty views).")
             return 1
         print(f"OVERALL ({len(tested)} class{'es' if len(tested) != 1 else ''} tested): {'PASS' if ok_all else 'FAIL'}"
@@ -187,6 +274,9 @@ def main() -> int:
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--label", help="label every frame as this class (for replaying a video of one object)")
     ap.add_argument("--no-window", action="store_true", help="no preview window (replaying a video file in a script)")
+    ap.add_argument("--say", action="store_true", help="speak what the hat's phone would say, plus label keys and the result")
+    ap.add_argument("--say-every", type=float, default=0, metavar="S",
+                    help="seconds between spoken sightings (default: the hat's 10 s; min 2)")
     a = ap.parse_args()
     if a.list:
         list_cameras()
@@ -196,6 +286,7 @@ def main() -> int:
         cfg = json.load(f)
     bc = BrimClasses(cfg)
     bc.print_mapping(cfg["mapping_source"])
+    speaker = Speaker(bc, cfg, a.say, max(a.say_every, 2.0) if a.say_every else 0)
     keys = {ord(k): v for k, v in KEY_CLASS.items() if v == "none" or v in bc.cls_of}
     keys[ord(" ")] = None
     label = a.label
@@ -212,6 +303,9 @@ def main() -> int:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     print(f"\ncamera {a.camera} open. Click the window, then press the key for what is in view (q quits).")
+    if a.say:
+        print(f"speaking one sighting every {speaker.every_s:.0f} s" + (" (the hat's pace)" if not a.say_every else " (faster than the hat)"))
+        speaker.say("Brim test ready. Press a key for what is in front of the camera.")
 
     sess = Session(bc)
     t_start = t_prev = time.perf_counter()
@@ -233,6 +327,8 @@ def main() -> int:
             fps = 0.9 * fps + 0.1 / max(dt, 1e-6) if fps else 1.0 / max(dt, 1e-6)
             t_prev = now
             sess.add(label, reported, ms, dt, n_phones, hits)
+            if a.say:
+                speaker.tick(dets, now)
             if a.no_window:
                 continue
             live = ""
@@ -249,12 +345,19 @@ def main() -> int:
             if k in keys:
                 label = keys[k]
                 print(f"{now - t_start:7.1f} s  truth: {label or 'not labelling'}")
+                if a.say:
+                    speaker.say("Not labelling." if label is None else "Labelling nothing in view." if label == "none"
+                                else f"Labelling {label}.", interrupt=True)
     except KeyboardInterrupt:
         pass
     finally:
         cap.release()
         cv2.destroyAllWindows()
-    return sess.summary(time.perf_counter() - t_start)
+    rc = sess.summary(time.perf_counter() - t_start)
+    if a.say:
+        speaker.say(sess.spoken_result, interrupt=True)
+        speaker.close()
+    return rc
 
 
 if __name__ == "__main__":
