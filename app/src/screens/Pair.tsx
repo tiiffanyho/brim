@@ -34,7 +34,7 @@ export function PairScreen() {
   return (
     <Screen
       title="Pair with your hat"
-      intro="The hat says a 6-digit code in your earpiece when it starts up. It is also on the demo screen if someone can read it to you."
+      intro="The 6-digit code is on the hat's demo screen. Ask someone to read it to you."
     >
       <form onSubmit={submit} noValidate>
         <label htmlFor="pin">6-digit PIN</label>

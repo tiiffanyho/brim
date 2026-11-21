@@ -20,7 +20,7 @@ function currentRoute(): RoutePath {
 }
 
 export function App() {
-  const { connection, stream, unreadAlerts } = useBrim();
+  const { connection, stream, linkLost, unreadAlerts } = useBrim();
   const [route, setRoute] = useState<RoutePath>(currentRoute);
 
   useEffect(() => {
@@ -29,8 +29,9 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const banner =
-    connection === "offline"
+  const banner = linkLost
+    ? "Connection lost. Retrying…"
+    : connection === "offline"
       ? "Can't reach your hat. Check the phone is on the hat's Wi-Fi. Retrying…"
       : connection === "online" && stream !== "open"
         ? "Reconnecting to live updates…"
@@ -47,8 +48,9 @@ export function App() {
         <span className="brand" aria-hidden="true">
           Brim
         </span>
-        {/* Persistent, polite status so connection changes are announced once, not on every render. */}
-        <p role="status" className={banner ? "banner" : "visually-hidden"}>
+        {/* Visible only: the phone says "Connection lost" / "Connected again" itself (state.tsx), so
+            this is not a live region (it would read a second, longer sentence on top). */}
+        <p className={banner ? "banner" : "visually-hidden"}>
           {banner}
         </p>
       </header>
