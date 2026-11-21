@@ -10,6 +10,16 @@ in-graph TFLite_Detection_PostProcess op. Laptop only: nothing here runs on the 
     .dev/venv/bin/pip install "ai-edge-litert==1.2.0" numpy pillow
     .dev/venv/bin/python scripts/laptop/brim_test.py data/traffic_test/IMG_0001.jpg [...]
 
+Live, on the webcam, with what brim would say (one SAYS line per warning or direction):
+
+    .dev/venv/bin/pip install "opencv-python==4.12.0.88"
+    .dev/venv/bin/python scripts/laptop/brim_test.py live [--camera 0] [--say]
+
+The words come from brim itself: each frame's boxes go to device/build/host/decide_probe (built by
+`cd device && cmake --build --preset host`), which runs brim's own close warning and navigation code
+("Person ahead, move left", "Chair ahead, move right", "Person ahead, stop", "Path unclear, stop").
+--say speaks them on the Mac (on the hat the phone speaks; the Pi plays no sound).
+
 As a library (scripts/test_traffic.py):  model = load_model();  dets = detect(model, load_image(p))
 detect() returns RAW model rows (COCO-90 class index, score, box): no Brim class mapping and no
 threshold, so a test can read any class directly (e.g. 9 = traffic light).
@@ -19,7 +29,10 @@ Privacy: photos are only read. Nothing is written, uploaded or kept, and no face
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -151,7 +164,137 @@ def detect(model: Model, rgb: np.ndarray) -> list[Detection]:
     return out
 
 
+PROBE = os.path.join(REPO, "device", "build", "host", "decide_probe")
+
+
+class Decider:
+    """brim's own decisions for each frame: pipes boxes to decide_probe (no Python copy of the rules)."""
+
+    def __init__(self, probe: str = PROBE) -> None:
+        if not os.path.exists(probe):
+            sys.exit(f"{os.path.relpath(probe, REPO)} not found: build it with  cd device && cmake --build --preset host")
+        self.proc = subprocess.Popen([probe], cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
+
+    def says(self, t_ms: int, dets: list[Detection]) -> list[tuple[str, str]]:
+        rows = " ".join(f"{d.y:.6f} {d.x:.6f} {d.y + d.h:.6f} {d.x + d.w:.6f} {d.class_id} {d.score:.6f}" for d in dets)
+        self.proc.stdin.write(f"{t_ms} {len(dets)} {rows}\n")
+        self.proc.stdin.flush()
+        out = json.loads(self.proc.stdout.readline())
+        return [(s["prio"], s["text"]) for s in out.get("says", [])]
+
+    def close(self) -> None:
+        self.proc.stdin.close()
+        self.proc.wait(timeout=5)
+
+
+class MacVoice:
+    """Speaks like the phone: a warning at once (cuts off anything else), a direction after it, and a
+    direction that is word for word the warning just said is not said again."""
+
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled and shutil.which("say") is not None
+        if enabled and not self.enabled:
+            print("note: no 'say' command (macOS only); printing SAYS lines only")
+        self.proc = None
+        self.pending: str | None = None
+        self.last_alert = ("", -1e9)
+
+    def busy(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def push(self, prio: str, text: str, now: float) -> None:
+        if prio == "safety":
+            self.last_alert = (text, now)
+            self.pending = None
+            if self.enabled:
+                if self.busy():
+                    self.proc.terminate()
+                self.proc = subprocess.Popen(["say", text])
+        elif not (text == self.last_alert[0] and now - self.last_alert[1] <= 5.0):
+            self.pending = text  # latest direction wins
+        self.pump()
+
+    def pump(self) -> None:
+        if not self.pending:
+            return
+        if not self.enabled:
+            self.pending = None
+        elif not self.busy():
+            self.proc = subprocess.Popen(["say", self.pending])
+            self.pending = None
+
+    def finish(self) -> None:
+        if self.busy():
+            self.proc.wait(timeout=10)
+
+
+def live(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="brim_test.py live", description="The hat's detector and words, live on the webcam.")
+    ap.add_argument("--camera", default="0", help="camera number, or a video file to replay")
+    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--say", action="store_true", help="speak the SAYS lines on the Mac")
+    ap.add_argument("--no-window", action="store_true", help="no preview window (replaying a video file)")
+    a = ap.parse_args(argv)
+    try:
+        import cv2
+    except ImportError:
+        sys.exit('needs OpenCV: .dev/venv/bin/pip install "opencv-python==4.12.0.88"')
+    model = load_model(a.model, a.threads)
+    decider = Decider()
+    voice = MacVoice(a.say)
+    src = int(a.camera) if a.camera.isdigit() else a.camera
+    cap = cv2.VideoCapture(src)
+    if not cap.isOpened():
+        sys.exit(f"camera {a.camera} did not open. On a Mac, allow camera access for your terminal "
+                 "(System Settings > Privacy & Security > Camera) and run again.")
+    if isinstance(src, int):  # the hat's frame size
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    print(f"camera {a.camera} open; q in the window quits. Nothing is saved.")
+    t0 = time.perf_counter()
+    last_said = ""
+    try:
+        while True:
+            ok, bgr = cap.read()
+            if not ok:
+                break
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            dets = detect(model, rgb)
+            now = time.perf_counter() - t0
+            for prio, text in decider.says(int(now * 1000), dets):
+                print(f"{now:7.1f} s  SAYS [{prio}] {text}")
+                voice.push(prio, text, now)
+                last_said = text
+            voice.pump()
+            if a.no_window:
+                continue
+            h, w = bgr.shape[:2]
+            for d in dets:
+                if d.class_id in COCO_NAMES and d.score >= 0.5:
+                    p0, p1 = (int(d.x * w), int(d.y * h)), (int((d.x + d.w) * w), int((d.y + d.h) * h))
+                    cv2.rectangle(bgr, p0, p1, (230, 230, 230), 2)
+                    cv2.putText(bgr, f"{d.name} {d.score:.2f}", (p0[0] + 2, max(16, p0[1] - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 2)
+            cv2.rectangle(bgr, (0, 0), (w, 34), (20, 20, 20), -1)
+            cv2.putText(bgr, f"SAYS: {last_said or '-'}", (10, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+            cv2.imshow("Brim live (nothing is saved)", bgr)
+            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        decider.close()
+        voice.finish()
+    return 0
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "live":
+        sys.exit(live(sys.argv[2:]))
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("photos", nargs="+")
     ap.add_argument("--model", default=DEFAULT_MODEL)
