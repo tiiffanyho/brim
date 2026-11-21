@@ -66,6 +66,7 @@ struct Ctx {
   config::AppConfig app;
   config::SafetyThresholds safety;
   config::NavThresholds nav;
+  config::DetectConfig detect;
   bool fake = false;
   events::EventStamper stamper{"brim"};
   ipc::EventBus* bus = nullptr;
@@ -476,6 +477,7 @@ int main(int argc, char** argv) {
   c.app = config::load_app(config::config_dir() + "/app.json");
   c.safety = config::load_safety(config::config_dir() + "/safety.json");
   c.nav = config::load_nav(config::config_dir() + "/nav.json");
+  c.detect = config::load_detect(config::config_dir() + "/detect.json");
 
   ipc::EventBus bus(events::kAppServerChannel);
   ipc::EventBus supervisor_bus(events::kSupervisorChannel, 4);
@@ -490,7 +492,12 @@ int main(int argc, char** argv) {
   const bool use_hw = false;
 #endif
   auto cam = use_hw ? capture::make_qnx_camera(c.app.capture_fps) : capture::make_fake_camera(c.app.capture_fps);
-  auto det = use_hw ? detect::make_mediapipe_detector(c.app.models_dir) : detect::make_stub_detector();
+  detect::DetectorConfig dcfg;
+  dcfg.model_path = c.app.models_dir + "/" + c.detect.model_file;
+  dcfg.threads = c.detect.threads;
+  dcfg.min_confidence = static_cast<float>(c.safety.min_confidence);
+  dcfg.phone_min_confidence = static_cast<float>(c.safety.phone_min_confidence);
+  auto det = use_hw ? detect::make_tflite_detector(dcfg) : detect::make_stub_detector();
   auto safety_mon = use_hw ? safety::make_vision_safety_monitor(c.safety, c.nav) : safety::make_stub_safety_monitor();
   auto audio_out = use_hw ? audio::make_qnx_audio_out(c.app.audio_dir) : audio::make_log_audio_out();
   std::unique_ptr<audio::VoiceActivity> vad = fake ? std::unique_ptr<audio::VoiceActivity>(new FakeVad) : audio::make_stub_vad();

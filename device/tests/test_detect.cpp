@@ -121,4 +121,15 @@ TEST_CASE("resize: 640x480 RGB to 320x320 keeps colours and layout, and does not
   CHECK_EQ(px(300, 300)[0], 10);
 }
 
+TEST_CASE("the unavailable/no-TFLite path never pretends to see") {
+  if (detect::tflite_available()) return;  // only meaningful in a build without TFLite
+  auto d = detect::make_tflite_detector(detect::DetectorConfig{});
+  CHECK(!d->load());
+  CHECK(!d->healthy());
+  capture::Frame f;
+  std::vector<detect::Detection> out(3);
+  d->detect(f, out);
+  CHECK_EQ(out.size(), 0u);
+}
+
 MINI_TEST_MAIN()

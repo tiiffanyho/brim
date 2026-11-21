@@ -76,11 +76,6 @@ class StubDetector final : public Detector {
 
 std::unique_ptr<Detector> make_stub_detector() { return std::make_unique<StubDetector>(); }
 
-std::unique_ptr<Detector> make_mediapipe_detector(const std::string& models_dir) {
-  BRIM_LOGW("detect", "MediaPipe detector not implemented yet (models_dir=%s); using stub", models_dir.c_str());  // TODO(ai)
-  return make_stub_detector();
-}
-
 // ------------------------------------------------------------------ model output helpers
 
 std::optional<Thing> thing_of_coco(int c) {

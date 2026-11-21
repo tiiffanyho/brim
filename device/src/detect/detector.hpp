@@ -52,26 +52,46 @@ struct Detection {
   bool is_person() const { return thing == Thing::Person; }
 };
 
+// How long each detection stage took on the last frame (ms). Logged against the 30 ms budget.
+struct StageTimes {
+  double resize_ms = 0;  // RGB888 frame -> model input tensor
+  double invoke_ms = 0;  // TfLiteInterpreterInvoke
+  double decode_ms = 0;  // output tensors -> Detection list
+  double total() const { return resize_ms + invoke_ms + decode_ms; }
+};
+
 class Detector {
  public:
   virtual ~Detector() = default;
   virtual bool load() = 0;
+  // Allocation-free form for the per-frame path: `out` is cleared and refilled, its capacity reused.
+  virtual void detect(const capture::Frame& frame, std::vector<Detection>& out) { out = detect(frame); }
+  // Convenience form (tests, tools). Allocates a new vector each call.
   virtual std::vector<Detection> detect(const capture::Frame& frame) = 0;
   virtual const char* name() const = 0;
   // Cannot-fail rule: a detector that is not healthy must say so, so brim can report a fault and
   // speak it, instead of silently pretending the path is clear.
   virtual bool healthy() const = 0;
+  virtual StageTimes last_stage_times() const { return {}; }
 };
 
 // Returns no detections. The laptop's --fake mode injects events further down the pipeline instead.
 std::unique_ptr<Detector> make_stub_detector();
 
-// TODO(ai): person + object detection with the open-source modules from https://oss.qnx.com:
-//   MediaPipe 0.10.26 object detector (EfficientDet-Lite0, int8) on tflite-runtime 2.21.0, frames
-//   converted with OpenCV 4.12. Model: models/efficientdet_lite0.tflite (see models/README.md).
-//   Budget: <= 30 ms per 640x480 frame on the Pi 5 CPU (4 threads), <= 66 ms for the whole frame.
-//   Keep the per-frame path allocation-free: reuse the input tensor and the detection vector.
-std::unique_ptr<Detector> make_mediapipe_detector(const std::string& models_dir);
+// Person + object detector: EfficientDet-Lite0 (uint8 quantized, with the in-graph
+// TFLite_Detection_PostProcess op) on tflite-runtime 2.21.0 from https://oss.qnx.com, via the
+// TFLite C API. See models/README.md for the model's source, tensors and budget.
+// No face model of any kind is loaded here.
+struct DetectorConfig {
+  std::string model_path = "models/efficientdet_lite0.tflite";
+  int threads = 4;
+  float min_confidence = 0.60f;        // safety.json min_confidence: below this a box is dropped
+  float phone_min_confidence = 0.55f;  // safety.json phone_min_confidence: phones only, for the safety alert
+};
+// When brim is built without TFLite (BRIM_WITH_TFLITE=OFF) this returns a detector whose load()
+// fails and which reports itself unhealthy, so brim speaks "cannot see" instead of guessing.
+std::unique_ptr<Detector> make_tflite_detector(const DetectorConfig& cfg);
+bool tflite_available();  // was this binary built with TFLite?
 
 // --- pure helpers used by the TFLite detector (host-testable, no TFLite needed) ---
 
