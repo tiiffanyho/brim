@@ -2,7 +2,6 @@
   "_comment": "Process config shared by brim, supervisor and app_server. Paths are relative to the working directory (repo root on the laptop, BRIM_PI_DIR on the Pi).",
   "data_dir": "data",
   "run_dir": "/tmp/brim",
-  "audio_dir": "audio",
   "models_dir": "models",
   "http_port": 8080,
   "capture_fps": 15,

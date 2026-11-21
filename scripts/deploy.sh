@@ -30,13 +30,12 @@ if [[ -z "${BRIM_SKIP_APP:-}" ]]; then
 fi
 
 say "staging $STAGE"
-rm -rf "$STAGE" && mkdir -p "$STAGE"/{bin,lib,config,data/migrations,app,models,audio}
+rm -rf "$STAGE" && mkdir -p "$STAGE"/{bin,lib,config,data/migrations,app,models}
 cp $QB/brim $QB/supervisor $QB/app_server "$STAGE/bin/"
 cp config/*.json "$STAGE/config/"
 cp data/migrations/*.sql "$STAGE/data/migrations/"
 cp -R app/dist "$STAGE/app/dist"
 cp -R models/. "$STAGE/models/" 2>/dev/null || true
-cp -R audio/. "$STAGE/audio/" 2>/dev/null || true
 cp scripts/pi/start.sh scripts/pi/stop.sh "$STAGE/"
 # Runtime shared libs from oss.qnx.com that the image doesn't already have.
 # TODO(qnx-check): `ldd`-equivalent on QNX is `use -i <bin>` / check with `ldd` from the SDP;

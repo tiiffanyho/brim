@@ -48,7 +48,6 @@ struct DetectConfig {
 struct AppConfig {
   std::string data_dir = "data";            // SQLite DB only (never frames, never audio of people)
   std::string run_dir = "/tmp/brim";        // UDS sockets on host
-  std::string audio_dir = "audio";
   std::string models_dir = "models";
   int http_port = 8080;
   int capture_fps = 15;
