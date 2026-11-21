@@ -82,6 +82,7 @@ FrameDecision decide_frame(const std::vector<Detection>& dets, const config::Nav
   if (ahead_blocked) {
     out.blocked.push_back(s::Direction::Ahead);
     out.because = biggest(in_corridor)->thing;
+    out.because_track = biggest(in_corridor)->track_id;
     if (!left_clear && !right_clear) {
       out.kind = FrameDecision::Kind::Stop;
       out.blocked = {s::Direction::Left, s::Direction::Ahead, s::Direction::Right};
@@ -107,24 +108,41 @@ FrameDecision decide_frame(const std::vector<Detection>& dets, const config::Nav
     out.direction = s::Direction::Ahead;
     out.blocked = {s::Direction::Left, s::Direction::Right};
     out.because = biggest(blockers)->thing;
+    out.because_track = biggest(blockers)->track_id;
     return out;
   }
   // Something close on one side: move away from it, towards the side we know is clear.
   out.direction = left_clear ? s::Direction::Left : s::Direction::Right;
   out.blocked.push_back(left_clear ? s::Direction::Right : s::Direction::Left);
   out.because = biggest(left_clear ? in_right : in_left)->thing;
+  out.because_track = biggest(left_clear ? in_right : in_left)->track_id;
   return out;
 }
 
-std::string text_for(const FrameDecision& d) {
-  if (d.kind == FrameDecision::Kind::Stop || d.kind == FrameDecision::Kind::NoCall) return kPathUnclear;
-  if (d.direction == s::Direction::Ahead) return "Clear path ahead";
-  std::string name = d.because == Thing::Unknown ? "something" : detect::to_string(d.because);
+std::string spoken_name(Thing t) {
+  std::string name = t == Thing::Unknown ? "something" : detect::to_string(t);
   name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
-  const char* step = d.direction == s::Direction::Left ? "step left" : "step right";
-  if (contains(d.blocked, s::Direction::Ahead)) return name + " ahead, " + step;
+  return name;
+}
+
+std::string text_for(const FrameDecision& d) {
+  if (d.kind == FrameDecision::Kind::Stop) return d.because == Thing::Person ? kPersonStop : kPathUnclear;
+  if (d.kind == FrameDecision::Kind::NoCall) return kPathUnclear;
+  if (d.direction == s::Direction::Ahead) return "Clear path ahead";
+  const std::string name = spoken_name(d.because);
+  const char* move = d.direction == s::Direction::Left ? "move left" : "move right";
+  if (contains(d.blocked, s::Direction::Ahead)) return name + " ahead, " + move;
   const char* side = d.direction == s::Direction::Left ? "on your right" : "on your left";
-  return name + " " + side + ", " + step;
+  return name + " " + side + ", " + move;
+}
+
+std::string warning_text(Thing close, const FrameDecision* current) {
+  // Only a confirmed call that goes round something in front gives a side; anything else is stop.
+  const bool has_side = current && current->kind == FrameDecision::Kind::Go &&
+                        (current->direction == s::Direction::Left || current->direction == s::Direction::Right) &&
+                        contains(current->blocked, s::Direction::Ahead);
+  if (!has_side) return close == Thing::Person ? kPersonStop : kPathUnclear;
+  return spoken_name(close) + " ahead, " + (current->direction == s::Direction::Left ? "move left" : "move right");
 }
 
 void Navigator::reset() {

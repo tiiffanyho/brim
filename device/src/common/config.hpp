@@ -45,6 +45,22 @@ struct DetectConfig {
   int stats_period_s = 5;                  // how often brim logs per-stage detect timings
 };
 
+// Face recognition of enrolled people (config/faces.json). Agreed by the team: only people who
+// enrolled are ever named; everyone else stays "Person". Off while faces_dir has nobody in it.
+struct FaceConfig {
+  std::string faces_dir = "data/faces";
+  std::string detector_model = "face_detection_yunet_2023mar.onnx";   // inside AppConfig::models_dir
+  std::string embedder_model = "face_recognition_sface_2021dec.onnx";
+  std::string embedder_id = "sface_2021dec";  // enrolled embeddings from another model are never used
+  double match_threshold = 0.363;             // cosine; never below 0.3 (no guessing)
+  double min_margin = 0.05;                   // the best enrolled person must beat the next by this
+  double face_min_score = 0.8;
+  int min_face_px = 40;
+  std::int64_t check_interval_ms = 1000;      // per person track, off the frame path
+  std::int64_t name_ttl_ms = 4000;            // a name is forgotten this long after its last match
+  std::int64_t gallery_reload_ms = 5000;      // enrol / remove take effect within this
+};
+
 struct AppConfig {
   std::string data_dir = "data";            // SQLite DB only (never frames, never audio of people)
   std::string run_dir = "/tmp/brim";        // UDS sockets on host
@@ -60,6 +76,7 @@ SafetyThresholds load_safety(const std::string& path);
 NavThresholds load_nav(const std::string& path);
 AppConfig load_app(const std::string& path);
 DetectConfig load_detect(const std::string& path);
+FaceConfig load_faces(const std::string& path);
 std::string config_dir();
 
 // The one definition of the wearer's default settings, shared by brim (before app_server has sent

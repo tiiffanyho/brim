@@ -7,7 +7,8 @@ safe ("step right") — or "Path unclear, stop" when nothing is. It also names o
 where people are, without ever saying *who* they are. A phone PWA (VoiceOver/TalkBack-first) shows
 activity, alerts, settings and device health.
 
-**Everything runs on the hat: no cloud, no internet, no recording, and no face recognition.**
+**Everything runs on the hat: no cloud, no internet, no recording. Only people who enrolled are
+ever named; everyone else stays "Person".**
 
 > Status: **skeleton + pipelines**. All plumbing works end to end with fake data; camera and AI
 > models are stubs marked `TODO(hw)`, `TODO(ai)` and `TODO(qnx-check)`. The Pi plays no sound:
@@ -15,13 +16,18 @@ activity, alerts, settings and device health.
 
 ## Privacy, in one paragraph
 
-Brim does not know who anyone is and cannot learn. There is no face detector, no face embedding, no
-gallery and no names anywhere in the code, the schema or the database — a person is a box with a
-throw-away `track_id` that means "the same person as a moment ago" and nothing more. Boxes live in
-memory for a few seconds; every track is cleared within 30 minutes, and the phone's history is
-purged on the same clock. No frames, no audio and no photos are ever written to disk, and the only
-network traffic is to our own phone app on the local Wi-Fi. `device/tests/test_privacy.cpp` fails
-the build if an identity field reappears in the schema.
+Brim does not know who a stranger is and never tries to. A person is a box with a throw-away
+`track_id` that means "the same person as a moment ago", said as "Person". The one exception,
+agreed by the team (Gloriana, Tiffany, Kim): someone who **agreed** can be enrolled
+(`scripts/faces/enrol.py <name> <photo>`), and then Brim may say "<name> ahead, move left" when it
+is sure it is them. Only their face embedding is kept, in `data/faces/` on the hat — never a photo,
+never uploaded, synced or committed — and `scripts/faces/remove.py <name>` deletes it. With nobody
+enrolled no face model runs at all. A stranger's face is compared in memory and dropped at once.
+Names go to the phone live and are never stored in the database or the logs. Boxes live in memory
+for a few seconds; every track is cleared within 30 minutes, and the phone's history is purged on
+the same clock. No frames, no audio and no photos are ever written to disk, and the only network
+traffic is to our own phone app on the local Wi-Fi. `device/tests/test_privacy.cpp` fails the build
+if a name reaches a stored or `person_seen` event, or face data reaches the schema.
 
 ## Architecture
 
@@ -84,6 +90,9 @@ Things to try:
 | `kill -USR1 $(pgrep -x brim)` | Freezes brim's pipeline. The supervisor restarts it in about 1.3 s, and the phone shows *restarting → recovered*. |
 | `scripts/fake_events.py` | Sends extra random events straight into app_server (handy for PWA-only work). |
 | `scripts/smoke_test.sh` | Full end-to-end check (also runs in CI). |
+| `scripts/laptop/brim_test.py live --say [--why]` | The hat's detector on the webcam, saying what brim would say (SAYS lines, from brim's own C++ via `device/tools/decide_probe`); names enrolled people. Nothing is saved. |
+| `scripts/laptop/object_test.py data/object_test` | Detector accuracy per class (every class Brim maps) on labelled photos; paths in `config/object_test.json`, photos git-ignored. |
+| `scripts/laptop/object_live.py` | The same test live on the webcam: point it at things, press a key for what is there, get the per-class table. Untested classes are skipped. Nothing is saved. |
 | `cd device && ctest --preset host` | C++ unit tests: schema, detection geometry, privacy, speak queue, SQLite layer, REST API. |
 | `cd app && npm test && npm run lint && npm run typecheck` | PWA tests, jsx-a11y lint, types. |
 
@@ -131,12 +140,14 @@ direction in the real pipeline rather than guessing one.
 `POST /pair` · `GET /health` · `GET /activity?limit=` · `GET /alerts?limit=` · `GET|PUT /settings` ·
 WebSocket `/ws` (subprotocol `brim-events`).
 
-There is no `/api/people`: the hat does not recognize anyone, so there is nobody to list, rename or
-forget. `PUT /settings` saves the settings and sends them to brim in the `reload_settings` command.
+There is no `/api/people`: enrolled people are managed only on the hat itself with
+`scripts/faces/{enrol,remove,list}.py`, never over the network. `PUT /settings` saves the settings and sends them to brim in the `reload_settings` command.
 
 ## Safety and privacy rules (enforced in code + tests)
 
-- Nobody is identified. No face detection, no embeddings, no names, no identity lookup.
+- Only enrolled people (who agreed) are named, only on a sure match, and only as "<name> ahead,
+  move left|right" or "<name> ahead, stop". Everyone else is "Person". Face embeddings stay in
+  `data/faces/` on the hat; names are never stored or logged; nothing runs while nobody is enrolled.
 - A `track_id` is forgotten within 30 minutes, and the same person coming back later is a new,
   unrelated id. Phone history is purged on the same 30-minute clock.
 - No frames, audio or photos are written to disk, ever.

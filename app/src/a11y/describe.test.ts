@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { BrimEvent } from "@schema";
-import { Deduper, describeEvent, obstacleWords, relativeTime } from "./describe";
+import { Deduper, describeEvent, withName, obstacleWords, relativeTime } from "./describe";
 
 const base = { seq: 1, source: "brim", t_mono_ms: 1 };
 
 describe("describeEvent", () => {
   it("says every safety alert assertively, as a short phrase", () => {
-    const e: BrimEvent = { ...base, type: "safety_alert", kind: "person_close", severity: "critical", text: "Person close ahead", direction: "ahead" };
+    const e: BrimEvent = { ...base, type: "safety_alert", kind: "person_close", severity: "critical", text: "Person ahead, move left", direction: "ahead" };
     expect(describeEvent(e)?.politeness).toBe("assertive");
     expect(describeEvent(e)?.tier).toBe("alert");
-    expect(describeEvent(e)?.text).toBe("Person close ahead.");
+    expect(describeEvent(e)?.text).toBe("Person ahead, move left.");
     expect(describeEvent({ ...e, severity: "info" })?.politeness).toBe("assertive");
   });
 
@@ -24,8 +24,8 @@ describe("describeEvent", () => {
   });
 
   it("says the safest direction, or 'stop' when there is none, in the polite region at nav priority", () => {
-    expect(describeEvent({ ...base, type: "clear_path", clear: true, direction: "right", text: "Chair ahead, step right" })).toEqual({
-      text: "Chair ahead, step right.",
+    expect(describeEvent({ ...base, type: "clear_path", clear: true, direction: "right", text: "Chair ahead, move right" })).toEqual({
+      text: "Chair ahead, move right.",
       politeness: "polite",
       tier: "nav",
       key: "path:right",
@@ -35,6 +35,18 @@ describe("describeEvent", () => {
     expect(stop?.politeness).toBe("polite");
     expect(stop?.tier).toBe("nav");
     expect(stop?.key).toBe("path:unclear");
+  });
+
+  it("names an enrolled person only, and only in 'Person ahead' phrases", () => {
+    const alert = { ...base, type: "safety_alert" as const, kind: "person_close" as const, severity: "critical" as const, direction: "ahead" as const };
+    expect(describeEvent({ ...alert, text: "Person ahead, move left", name: "Tiffany" })?.text).toBe("Tiffany ahead, move left.");
+    expect(describeEvent({ ...alert, text: "Person ahead, stop", name: "Tiffany" })?.text).toBe("Tiffany ahead, stop.");
+    expect(describeEvent({ ...alert, text: "Person ahead, move left" })?.text).toBe("Person ahead, move left.");
+    expect(describeEvent({ ...alert, kind: "object_close", text: "Chair ahead, move left", name: "Tiffany" })?.text).toBe("Chair ahead, move left.");
+    expect(describeEvent({ ...alert, text: "Person ahead, move left", name: "<b>x</b>" })?.text).toBe("Person ahead, move left.");
+    const path = { ...base, type: "clear_path" as const, clear: true, direction: "right" as const, text: "Person ahead, move right" };
+    expect(describeEvent({ ...path, name: "Tiffany" })?.text).toBe("Tiffany ahead, move right.");
+    expect(withName("Person ahead, move right", "Tiffany")).toBe("Tiffany ahead, move right");
   });
 
   it("says where a person is without saying who they are", () => {

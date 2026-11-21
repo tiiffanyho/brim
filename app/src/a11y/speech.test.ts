@@ -19,22 +19,33 @@ describe("SpeechScheduler", () => {
   it("says a safety alert at once, in the assertive region, even mid-sentence", () => {
     const { s, said } = setup();
     s.push("Person on your left, close by.", "info");
-    s.push("Person close ahead.", "alert");
+    s.push("Person ahead, move right.", "alert");
     expect(said.map((x) => [x.text, x.p])).toEqual([
       ["Person on your left, close by.", "polite"],
-      ["Person close ahead.", "assertive"],
+      ["Person ahead, move right.", "assertive"],
     ]);
   });
 
   it("says a direction as soon as it arrives, but never on top of the warning before it", () => {
     const { s, said, advance } = setup();
-    s.push("Chair close ahead.", "alert"); // 18 chars * 50 = 900 ms
-    s.push("Chair ahead, step left.", "nav");
+    s.push("Chair ahead, move left.", "alert"); // 23 chars * 50 = 1150 ms
+    s.push("Chair on your right, move left.", "nav");
     expect(said).toHaveLength(1);
-    advance(1000);
-    expect(said.map((x) => x.text)).toEqual(["Chair close ahead.", "Chair ahead, step left."]);
+    advance(1300);
+    expect(said.map((x) => x.text)).toEqual(["Chair ahead, move left.", "Chair on your right, move left."]);
     expect(said[1]?.p).toBe("polite");
-    expect(said[1]?.at).toBeGreaterThanOrEqual(900);
+    expect(said[1]?.at).toBeGreaterThanOrEqual(1150);
+  });
+
+  it("says a warning and its direction once when they are the same phrase", () => {
+    const { s, said, advance } = setup();
+    s.push("Person ahead, move left.", "alert");
+    s.push("Person ahead, move left.", "nav"); // the nav call that gave the warning its side
+    advance(3000);
+    expect(said.map((x) => [x.text, x.p])).toEqual([["Person ahead, move left.", "assertive"]]);
+    // A different call afterwards is said.
+    s.push("Person ahead, stop.", "nav");
+    expect(said.at(-1)?.text).toBe("Person ahead, stop.");
   });
 
   it("a direction does not wait for an info phrase", () => {
@@ -46,22 +57,22 @@ describe("SpeechScheduler", () => {
 
   it("only the latest direction is said when several wait", () => {
     const { s, said, advance } = setup();
-    s.push("Person close ahead.", "alert");
-    s.push("Step left.", "nav");
+    s.push("Person ahead, move right.", "alert");
+    s.push("Move left.", "nav");
     s.push("Path unclear, stop.", "nav");
     advance(2000);
-    expect(said.map((x) => x.text)).toEqual(["Person close ahead.", "Path unclear, stop."]);
+    expect(said.map((x) => x.text)).toEqual(["Person ahead, move right.", "Path unclear, stop."]);
   });
 
   it("says the rest only when nothing else is being said", () => {
     const { s, said, advance } = setup();
-    s.push("Chair ahead, step right.", "nav"); // 24 * 50 = 1200 ms
+    s.push("Chair ahead, move right.", "nav"); // 24 * 50 = 1200 ms
     s.push("Person on your right.", "info");
     expect(said).toHaveLength(1);
     advance(1100);
     expect(said).toHaveLength(1);
     advance(200);
-    expect(said.map((x) => x.text)).toEqual(["Chair ahead, step right.", "Person on your right."]);
+    expect(said.map((x) => x.text)).toEqual(["Chair ahead, move right.", "Person on your right."]);
   });
 
   it("drops info that waited more than 3 s; status waits as long as it takes", () => {

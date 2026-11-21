@@ -13,7 +13,7 @@
 namespace brim::schema {
 
 using brim::json::Value;
-inline constexpr int kSchemaVersion = 2;
+inline constexpr int kSchemaVersion = 3;
 
 // Where something is relative to the wearer's head, or which way to move.
 enum class Direction { Left, Ahead, Right, Unknown };
@@ -326,6 +326,7 @@ struct ClearPathEvent {
   Direction direction{};
   std::string text;  // Exactly what was spoken, e.g. 'Clear path ahead' or 'Path unclear, stop'.
   std::optional<std::vector<Direction>> blocked;  // Directions ruled out this decision.
+  std::optional<std::string> name;  // First name of an ENROLLED person this is about (on-device face match against data/faces; see config/faces.json). Set only when the match is sure; absent for everyone else, who stays 'Person'. The phone says it in place of 'Person' ('Tiffany ahead, move left'). Live only: app_server never stores it, and `text` stays anonymous.
 };
 
 // Highest speech priority: something close in front, or a phone held up toward the wearer.
@@ -342,6 +343,7 @@ struct SafetyAlertEvent {
   Direction direction{};
   std::optional<Proximity> proximity;
   std::optional<double> confidence;
+  std::optional<std::string> name;  // First name of an ENROLLED person this is about (on-device face match against data/faces; see config/faces.json). Set only when the match is sure; absent for everyone else, who stays 'Person'. The phone says it in place of 'Person' ('Tiffany ahead, move left'). Live only: app_server never stores it, and `text` stays anonymous.
 };
 
 struct FaultEvent {
@@ -526,6 +528,7 @@ inline Value to_json(const ClearPathEvent& v) {
   o.set("direction", detail::enc(v.direction));
   o.set("text", detail::enc(v.text));
   if (v.blocked) o.set("blocked", detail::enc(*v.blocked));
+  if (v.name) o.set("name", detail::enc(*v.name));
   return o;
 }
 inline bool from_json(const Value& j, ClearPathEvent& out, std::string* err) {
@@ -540,6 +543,7 @@ inline bool from_json(const Value& j, ClearPathEvent& out, std::string* err) {
   { const Value* x = j.find("direction"); if (!x || !detail::dec(*x, out.direction)) return detail::fail(err, "ClearPathEvent", "direction"); }
   { const Value* x = j.find("text"); if (!x || !detail::dec(*x, out.text)) return detail::fail(err, "ClearPathEvent", "text"); }
   { const Value* x = j.find("blocked"); if (x && !x->is_null()) { std::vector<Direction> t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ClearPathEvent", "blocked"); out.blocked = std::move(t); } else { out.blocked.reset(); } }
+  { const Value* x = j.find("name"); if (x && !x->is_null()) { std::string t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ClearPathEvent", "name"); out.name = std::move(t); } else { out.name.reset(); } }
   return true;
 }
 
@@ -557,6 +561,7 @@ inline Value to_json(const SafetyAlertEvent& v) {
   o.set("direction", detail::enc(v.direction));
   if (v.proximity) o.set("proximity", detail::enc(*v.proximity));
   if (v.confidence) o.set("confidence", detail::enc(*v.confidence));
+  if (v.name) o.set("name", detail::enc(*v.name));
   return o;
 }
 inline bool from_json(const Value& j, SafetyAlertEvent& out, std::string* err) {
@@ -573,6 +578,7 @@ inline bool from_json(const Value& j, SafetyAlertEvent& out, std::string* err) {
   { const Value* x = j.find("direction"); if (!x || !detail::dec(*x, out.direction)) return detail::fail(err, "SafetyAlertEvent", "direction"); }
   { const Value* x = j.find("proximity"); if (x && !x->is_null()) { Proximity t{}; if (!detail::dec(*x, t)) return detail::fail(err, "SafetyAlertEvent", "proximity"); out.proximity = std::move(t); } else { out.proximity.reset(); } }
   { const Value* x = j.find("confidence"); if (x && !x->is_null()) { double t{}; if (!detail::dec(*x, t)) return detail::fail(err, "SafetyAlertEvent", "confidence"); out.confidence = std::move(t); } else { out.confidence.reset(); } }
+  { const Value* x = j.find("name"); if (x && !x->is_null()) { std::string t{}; if (!detail::dec(*x, t)) return detail::fail(err, "SafetyAlertEvent", "name"); out.name = std::move(t); } else { out.name.reset(); } }
   return true;
 }
 

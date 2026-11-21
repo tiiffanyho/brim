@@ -137,7 +137,7 @@ TEST_CASE("person events carry no identity") {
   CHECK_EQ(j.get_int("track_id"), 4);
 }
 
-TEST_CASE("the event schema has no identity fields") {
+TEST_CASE("the event schema has no face data, and names only where the team agreed") {
   std::ifstream f(std::string(BRIM_REPO_ROOT) + "/shared/events.schema.json");
   REQUIRE(f.good());
   std::stringstream ss;
@@ -148,6 +148,16 @@ TEST_CASE("the event schema has no identity fields") {
     if (schema.find(forbidden) != std::string::npos) std::printf("  schema still mentions %s\n", forbidden);
     CHECK(schema.find(forbidden) == std::string::npos);
   }
+  // Face recognition of enrolled people (agreed by the team): an optional "name" on safety_alert
+  // and clear_path only. person_seen and everything stored (Alert, ActivityItem) stay anonymous.
+  auto j = json::parse(schema);
+  REQUIRE(j.has_value());
+  const json::Value* defs = j->find("$defs");
+  REQUIRE(defs != nullptr);
+  for (const char* def : {"SafetyAlertEvent", "ClearPathEvent"})
+    CHECK(defs->find(def)->find("properties")->find("name") != nullptr);
+  for (const char* def : {"PersonSeenEvent", "ObstacleSeenEvent", "Alert", "ActivityItem", "HealthEvent"})
+    CHECK(defs->find(def)->find("properties")->find("name") == nullptr);
 }
 
 TEST_CASE("config floors: never chattier than 1 info per 10 s, never keep tracks past 30 min") {

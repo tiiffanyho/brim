@@ -1,7 +1,7 @@
 // Detection: a camera frame -> boxes for people and objects, plus anonymous tracks.
 //
 // Privacy rules enforced here, and they are the whole point of this module:
-//   * no face recognition, no face embeddings, no identity lookup of any kind;
+//   * no face model in here: naming people who enrolled (and only them) lives in detect/faces.hpp;
 //   * a person is a box with a track_id, never a name — the track_id says "the same person as a
 //     moment ago", nothing more, and it is meaningless once the track is dropped;
 //   * boxes are kept only as long as a track is alive (seconds), and TrackStore::expire() clears
@@ -81,7 +81,7 @@ std::unique_ptr<Detector> make_stub_detector();
 // Person + object detector: EfficientDet-Lite0 (uint8 quantized, with the in-graph
 // TFLite_Detection_PostProcess op) on tflite-runtime 2.21.0 from https://oss.qnx.com, via the
 // TFLite C API. See models/README.md for the model's source, tensors and budget.
-// No face model of any kind is loaded here.
+// No face model of any kind is loaded here (see detect/faces.hpp for enrolled people).
 struct DetectorConfig {
   std::string model_path = "models/efficientdet_lite0.tflite";
   int threads = 4;

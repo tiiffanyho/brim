@@ -53,7 +53,7 @@ async function request<T>(method: Method, path: string, body?: unknown): Promise
   return json as T;
 }
 
-// There is no people endpoint: the hat does not recognize faces, so there is nobody to list.
+// There is no people endpoint: enrolled people are managed only on the hat (scripts/faces), never over the network.
 export const api = {
   pair: (pin: string) => request<PairResponse>("POST", "/pair", { pin }),
   health: () => request<HealthResponse>("GET", "/health"),

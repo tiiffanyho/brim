@@ -79,9 +79,11 @@ for t in person_seen obstacle_seen clear_path safety_alert health fault; do
   echo "$RES" | grep -q "\"$t\"" && pass "received $t" || fail "no $t event"
 done
 grep -q "Path unclear, stop" "$DATA/ws.out" && pass "says 'Path unclear, stop' instead of guessing" || fail "no path-unclear decision"
-# Same tick: the warning and its direction. The warning must leave first.
-grep -A1 'CUE \[safety\] "Person close ahead"' "$DATA/sup.log" | grep -q 'CUE \[nav\]' \
+# Same tick: the warning (one phrase with the way out) and its direction. The warning leaves first.
+grep -A1 'CUE \[safety\] "Person ahead, move right"' "$DATA/sup.log" | grep -q 'CUE \[nav\]' \
   && pass "a direction is sent right after the warning that made it necessary" || fail "cue order wrong"
+grep -qiE "step (left|right)|close ahead|nearby|someone" "$DATA/sup.log" \
+  && fail "old wording still sent" || pass "warnings and directions use the new wording (move left/right, stop)"
 grep -q "SAY \[" "$DATA/sup.log" && fail "brim still plays audio" || pass "brim plays no audio (cues only)"
 grep -q "restarting brim" "$DATA/sup.log" && pass "supervisor restarted hung brim" || fail "no restart"
 grep -q "brim recovered" "$DATA/sup.log" && pass "brim recovered" || fail "no recovery"

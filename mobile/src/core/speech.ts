@@ -24,6 +24,8 @@ export interface SpeechOptions {
   /** Rough speaking time per character at the default screen-reader rate. */
   msPerChar?: number;
   minSpeakMs?: number;
+  /** A direction identical to a warning said this recently is not said again. */
+  repeatWindowMs?: number;
 }
 
 interface Pending {
@@ -42,6 +44,8 @@ export class SpeechScheduler {
   private pending: Pending[] = [];
   private busyUntil = 0;
   private busyTier: Tier | null = null;
+  private lastAlert: { text: string; at: number } | null = null;
+  private readonly repeatWindowMs: number;
 
   constructor(
     private readonly out: (text: string, politeness: Politeness) => void,
@@ -51,14 +55,18 @@ export class SpeechScheduler {
     this.infoMaxAgeMs = opts.infoMaxAgeMs ?? 3000;
     this.msPerChar = opts.msPerChar ?? 65;
     this.minSpeakMs = opts.minSpeakMs ?? 900;
+    this.repeatWindowMs = opts.repeatWindowMs ?? 5000;
   }
 
   push(text: string, tier: Tier): void {
     const now = this.now();
     if (tier === "alert") {
       this.say(text, "assertive", tier, now);
+      this.lastAlert = { text, at: now };
       return;
     }
+    // "Tiffany ahead, move left" as a warning and then as the direction: said once.
+    if (tier === "nav" && this.lastAlert && this.lastAlert.text === text && now - this.lastAlert.at <= this.repeatWindowMs) return;
     if (tier === "nav") this.pending = this.pending.filter((p) => p.tier !== "nav"); // latest direction wins
     if (tier === "status") this.pending = this.pending.filter((p) => !(p.tier === "status" && p.text === text));
     this.pending.push({ text, tier, at: now });

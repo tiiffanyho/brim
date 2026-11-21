@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BrimEvent, ClearPathEvent, Direction, FaultEvent, ObstacleSeenEvent, PersonSeenEvent, SafetyAlertEvent } from "@schema";
 import { describeEvent, directionWords, obstacleWords, proximityWords } from "../a11y/describe";
-import { useBrim } from "../state";
+import { useBrim, useLiveEvents } from "../state";
 
 type Tone = "calm" | "warn" | "alert" | "safe";
 interface Said {
@@ -46,25 +46,7 @@ function spokenText(e: BrimEvent): string | null {
 }
 
 export function LiveScreen() {
-  const { stream, faults, subscribe } = useBrim();
-  return <LiveView subscribe={subscribe} live={stream === "open"} faults={faults} />;
-}
-
-/**
- * The screen itself, fed by any event source: the hat (via useBrim) or, in dev, the laptop
- * camera link (screens/PhoneLink.tsx). Same events, same look.
- */
-export function LiveView({
-  subscribe,
-  live,
-  faults,
-  liveLabel = "Live",
-}: {
-  subscribe: (fn: (e: BrimEvent) => void) => () => void;
-  live: boolean;
-  faults: FaultEvent[];
-  liveLabel?: string;
-}) {
+  const { stream, faults } = useBrim();
   const h1 = useRef<HTMLHeadingElement>(null);
   const [said, setSaid] = useState<Said | null>(null);
   const [alert, setAlert] = useState<{ e: SafetyAlertEvent; at: number } | null>(null);
@@ -76,19 +58,15 @@ export function LiveView({
   useEffect(() => {
     document.title = "Live – Brim";
     h1.current?.focus();
-    const t = setInterval(() => setNow(Date.now()), 250);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  const onEvent = useRef<(e: BrimEvent) => void>(() => {});
-  useEffect(() => subscribe((e) => onEvent.current(e)), [subscribe]);
-  onEvent.current = (e) => {
+  useLiveEvents((e) => {
     const at = Date.now();
     if (e.type === "health") return;
     if (e.type === "safety_alert") setAlert({ e, at });
     if (e.type === "clear_path") setPath({ e, at });
-    // An all-clear ends the warning on screen.
-    if (e.type === "clear_path" && e.clear && e.direction === "ahead" && !(e.blocked ?? []).length) setAlert(null);
     if (e.type === "obstacle_seen") setObstacle({ e, at });
     if (e.type === "person_seen")
       setPeople((m) => {
@@ -98,7 +76,7 @@ export function LiveView({
       });
     const text = spokenText(e);
     if (text) setSaid({ text, tone: toneOf(e), at, type: e.type });
-  };
+  });
 
   const fresh = (at: number) => now - at < LIVE_TTL_MS;
   const activeFault: FaultEvent | undefined = faults[0]?.action === "degraded" ? faults[0] : undefined;
@@ -106,13 +84,16 @@ export function LiveView({
   const livePath = path && fresh(path.at) ? path.e : null;
   const liveObstacle = obstacle && fresh(obstacle.at) ? obstacle.e : null;
   const livePeople = [...people.values()].filter((p) => fresh(p.at)).map((p) => p.e);
-  const guiding = liveAlert && said?.type === "clear_path" && said.at >= liveAlert.at;
+  // Only a close warning is paired with the direction after it; a phone warning has no way out.
+  const guiding = liveAlert && liveAlert.e.kind !== "phone_raised" && said?.type === "clear_path" && said.at >= liveAlert.at;
 
   const tone: Tone = activeFault ? "warn" : liveAlert ? "alert" : (said?.tone ?? "calm");
   const quote = activeFault
     ? activeFault.message
     : guiding
-      ? `${trimStop(liveAlert.e.text)}. ${trimStop(said.text)}.`
+      ? liveAlert.e.text === said.text
+        ? `${said.text}.` // one phrase: the warning already says what to do
+        : `${liveAlert.e.text}. ${said.text}.`
       : (said?.text ?? "Listening. Checking the path ahead.");
   const status = activeFault
     ? "Hat problem"
@@ -120,11 +101,15 @@ export function LiveView({
       ? "Safety warning · guiding"
       : liveAlert
         ? "Safety warning"
-        : liveObstacle
-          ? "Obstacle ahead"
-          : tone === "safe"
-            ? "Back to normal"
-            : "Walking · all clear";
+        : livePath && !livePath.clear
+          ? "Path blocked · stop"
+          : liveObstacle
+            ? "Obstacle ahead"
+            : tone === "safe"
+              ? "Back to normal"
+              : livePath?.clear
+                ? "All clear"
+                : "Watching the path"; // never claim clear unless Brim just said so
 
   const blocked = new Set<Direction>(livePath?.clear === false ? ["left", "ahead", "right"] : (livePath?.blocked ?? []));
   const next = activeFault
@@ -133,8 +118,8 @@ export function LiveView({
       ? !livePath.clear
         ? "Stop and wait. Brim will say when a path clears."
         : livePath.direction === "ahead"
-          ? "Keep going straight"
-          : `Step ${livePath.direction}, then keep going straight`
+          ? "Path ahead is clear"
+          : `Move ${livePath.direction}`
       : null;
 
   return (
@@ -143,7 +128,7 @@ export function LiveView({
       <p className="live-status">
         <span className="dot" aria-hidden="true" />
         <span>{status}</span>
-        <span className="live-conn">{live ? liveLabel : "Reconnecting…"}</span>
+        <span className="live-conn">{stream === "open" ? "Live" : "Reconnecting…"}</span>
       </p>
 
       <div className="says">
@@ -203,17 +188,15 @@ export function LiveView({
         )}
         {next && (
           <div className="next">
-            <span className="kicker">{activeFault ? "To fix" : "Next step"}</span>
+            <span className="kicker">{activeFault ? "To fix" : "What to do"}</span>
             <p>{next}</p>
           </div>
         )}
       </section>
-      <p className="muted center">Everything here is also spoken in your earpiece.</p>
+      <p className="muted center">Everything here is also read out by your screen reader.</p>
     </section>
   );
 }
-
-const trimStop = (s: string) => s.replace(/[.\s]+$/, "");
 
 function ago(ms: number): string {
   const s = Math.round(ms / 1000);
