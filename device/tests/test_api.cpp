@@ -1,4 +1,6 @@
 // REST API tests through the transport-independent router (no sockets needed).
+#include <unistd.h>  // mkdtemp (macOS declares it here, not in <cstdlib>)
+
 #include <cstdlib>
 #include <string>
 
