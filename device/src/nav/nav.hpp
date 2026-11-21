@@ -1,5 +1,6 @@
-// Navigation: after a warning, the safest way to move — clear ahead, step left, step right — or
-// "Path unclear, stop" when no direction is safe.
+// Navigation: after a warning, the safest way to move — clear ahead, move left, move right — or
+// stop when no direction is safe ("Person ahead, stop" when a person is in the way, otherwise
+// "Path unclear, stop").
 //
 // The camera is the only sensor (no distance sensor), so "in the way" is judged from boxes alone:
 //   * the corridor is the floor in front of the wearer: the middle band of the frame
@@ -16,6 +17,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "common/config.hpp"
@@ -25,6 +27,7 @@
 namespace brim::nav {
 
 inline constexpr const char* kPathUnclear = "Path unclear, stop";
+inline constexpr const char* kPersonStop = "Person ahead, stop";
 
 // One frame's verdict, before any smoothing.
 struct FrameDecision {
@@ -41,8 +44,18 @@ struct FrameDecision {
 FrameDecision decide_frame(const std::vector<detect::Detection>& dets, const config::NavThresholds& t,
                            double min_confidence);
 
-// The words for a decision, e.g. "Chair ahead, step left", "Path unclear, stop".
+// The words for a decision: "Chair ahead, move left", "Chair on your left, move right",
+// "Clear path ahead", "Person ahead, stop" (a person in the way, no clear side) or
+// "Path unclear, stop". Never walk, cross or go, and never a direction we are not sure of.
 std::string text_for(const FrameDecision& d);
+
+// The spoken name of a thing in the way: "Person", "Chair", "Vehicle", "Something" (never a guess).
+std::string spoken_name(detect::Thing t);
+
+// The one-phrase close warning for `close` (a thing close in front): "<Name> ahead, move left|right"
+// when `current` is a confirmed call with that clear side, else stop ("Person ahead, stop" for a
+// person, "Path unclear, stop" for anything else). If unsure, stop.
+std::string warning_text(detect::Thing close, const FrameDecision* current);
 
 // Smoothing over frames: confirmation, hold, and "unsure means stop".
 class Navigator {
@@ -52,6 +65,8 @@ class Navigator {
   // Call once per detected frame. Returns an event to emit and speak (Priority::Nav), or nothing.
   std::optional<schema::ClearPathEvent> update(const std::vector<detect::Detection>& dets, std::int64_t now_ms);
   void reset();
+  // The call that currently stands (confirmed and announced), or nullptr while we are not sure.
+  const FrameDecision* current() const { return has_current_ ? &current_ : nullptr; }
 
  private:
   std::optional<schema::ClearPathEvent> announce(const FrameDecision& d, std::int64_t now_ms);
