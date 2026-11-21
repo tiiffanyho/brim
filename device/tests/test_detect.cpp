@@ -121,6 +121,30 @@ TEST_CASE("resize: 640x480 RGB to 320x320 keeps colours and layout, and does not
   CHECK_EQ(px(300, 300)[0], 10);
 }
 
+TEST_CASE("pacer: every frame within budget, every 2nd frame when over, back with hysteresis") {
+  detect::DetectPacer p(30, 0);
+  CHECK(p.tick());
+  CHECK(p.tick());
+  CHECK(!p.record(20));  // avg 20
+  CHECK(!p.record(60));  // avg 28: one slow frame is not enough
+  CHECK_EQ(p.stride(), 1);
+  CHECK(p.record(60));   // avg 34.4 > 30: switch to every 2nd frame
+  CHECK_EQ(p.stride(), 2);
+  int ran = 0;
+  for (int i = 0; i < 10; ++i) ran += p.tick() ? 1 : 0;
+  CHECK_EQ(ran, 5);
+  CHECK(!p.record(10));  // avg 29.5: under budget but not by enough to flap back
+  CHECK_EQ(p.stride(), 2);
+  bool back = false;
+  for (int i = 0; i < 10 && !back; ++i) back = p.record(10);
+  CHECK(back);
+  CHECK_EQ(p.stride(), 1);
+
+  detect::DetectPacer fixed(30, 2);  // forced every 2nd frame: never changes
+  CHECK(!fixed.record(1));
+  CHECK_EQ(fixed.stride(), 2);
+}
+
 TEST_CASE("the unavailable/no-TFLite path never pretends to see") {
   if (detect::tflite_available()) return;  // only meaningful in a build without TFLite
   auto d = detect::make_tflite_detector(detect::DetectorConfig{});

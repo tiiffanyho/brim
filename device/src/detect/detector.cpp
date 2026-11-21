@@ -163,6 +163,30 @@ void decode_detections(const float* boxes, const float* classes, const float* sc
   }
 }
 
+bool DetectPacer::record(double ms) {
+  avg_ms_ = avg_ms_ < 0 ? ms : avg_ms_ * 0.8 + ms * 0.2;
+  if (fixed_ == 1 || fixed_ == 2) return false;
+  if (stride_ == 1 && avg_ms_ > budget_ms_) {
+    stride_ = 2;
+    return true;
+  }
+  if (stride_ == 2 && avg_ms_ < budget_ms_ * 0.75) {
+    stride_ = 1;
+    return true;
+  }
+  return false;
+}
+
+void StageStats::add(const StageTimes& t, double track_ms) {
+  ++runs;
+  sum.resize_ms += t.resize_ms, sum.invoke_ms += t.invoke_ms, sum.decode_ms += t.decode_ms;
+  max.resize_ms = std::max(max.resize_ms, t.resize_ms);
+  max.invoke_ms = std::max(max.invoke_ms, t.invoke_ms);
+  max.decode_ms = std::max(max.decode_ms, t.decode_ms);
+  track_sum += track_ms;
+  track_max = std::max(track_max, track_ms);
+}
+
 // ------------------------------------------------------------------ tracks
 
 float TrackStore::match_score(const Box& t, const Box& d) const {

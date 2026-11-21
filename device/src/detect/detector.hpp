@@ -119,6 +119,37 @@ class RgbResizer {
 void decode_detections(const float* boxes, const float* classes, const float* scores, int count,
                        float min_confidence, float phone_min_confidence, std::vector<Detection>& out);
 
+// Runs the detector every frame, or every 2nd frame while it is over budget (with hysteresis so
+// it does not flap). fixed_stride 1 or 2 forces that stride; 0 = automatic.
+class DetectPacer {
+ public:
+  DetectPacer(double budget_ms, int fixed_stride) : budget_ms_(budget_ms), fixed_(fixed_stride) {
+    if (fixed_ == 1 || fixed_ == 2) stride_ = fixed_;
+  }
+  // Call once per camera frame; true = run the detector on this one.
+  bool tick() { return (counter_++ % static_cast<std::uint64_t>(stride_)) == 0; }
+  // Feed the detect time of each run. Returns true when the stride just changed.
+  bool record(double ms);
+  int stride() const { return stride_; }
+  double average_ms() const { return avg_ms_; }
+
+ private:
+  double budget_ms_;
+  int fixed_;
+  int stride_ = 1;
+  std::uint64_t counter_ = 0;
+  double avg_ms_ = -1;
+};
+
+// Average / max per stage over a window, for one log line every few seconds.
+struct StageStats {
+  int runs = 0;
+  StageTimes sum, max;
+  double track_sum = 0, track_max = 0;
+  void add(const StageTimes& t, double track_ms);
+  void reset() { *this = StageStats{}; }
+};
+
 // Which third of the frame something is in. side_margin_frac comes from config/nav.json.
 schema::Direction direction_of(const Box& b, double side_margin_frac);
 
