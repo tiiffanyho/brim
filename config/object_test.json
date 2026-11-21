@@ -1,0 +1,9 @@
+{
+  "_comment": "Paths for the laptop object accuracy test (scripts/laptop/object_test.py). Test only: brim never reads this file. The test reads the COCO-to-Thing mapping from mapping_source and the confidence thresholds from safety_config (read-only), so it scores exactly what the hat would see. Paths are relative to the repo root; data_dir is git-ignored.",
+  "data_dir": "data/object_test",
+  "labels_file": "labels.csv",
+  "model": "models/efficientdet_lite0.tflite",
+  "safety_config": "config/safety.json",
+  "mapping_source": "device/src/detect/detector.cpp",
+  "nav_source": "device/src/nav/nav.cpp"
+}
