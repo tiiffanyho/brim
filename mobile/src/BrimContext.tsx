@@ -5,12 +5,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AccessibilityInfo, AppState } from "react-native";
-import type { BrimEvent, HealthEvent, HealthResponse } from "@schema";
+import type { BrimEvent, FaultEvent, HealthEvent, HealthResponse, Settings } from "@schema";
 import { Deduper, describeEvent } from "@web/a11y/describe";
 import { HealthWatch, SpeechScheduler, type Tier } from "@web/a11y/speech";
 import { EventStream, type StreamStatus } from "@web/api/ws";
 import { ApiError, makeApi, wsUrlFor, type HatApi } from "./api";
-import { say, setSpeechRate, startOnDuty, stopOnDuty } from "./voice";
+import { say, setVoice, startOnDuty, stopOnDuty } from "./voice";
 
 /** No health event for this long = connection lost (health_period_ms is 1000 in config/app.json). */
 export const HEALTH_TIMEOUT_MS = 3000;
@@ -29,6 +29,7 @@ export interface Spoken {
 
 interface BrimState {
   hatUrl: string | null;
+  api: HatApi | null;
   connection: Connection;
   stream: StreamStatus;
   linkLost: boolean;
@@ -36,9 +37,16 @@ interface BrimState {
   recent: Spoken[];
   health: HealthResponse | null;
   liveHealth: HealthEvent | null;
+  faults: FaultEvent[];
+  unreadAlerts: number;
+  clearUnreadAlerts: () => void;
+  /** Calls fn for every live event; returns an unsubscribe function. */
+  subscribe: (fn: (e: BrimEvent) => void) => () => void;
   pair: (hatUrl: string, pin: string) => Promise<void>;
   forgetHat: () => Promise<void>;
   setSpeaking: (on: boolean) => void;
+  /** The hat's settings were loaded or saved: apply the voice parts to the phone. */
+  applySettings: (s: Settings) => void;
 }
 
 const Ctx = createContext<BrimState | null>(null);
@@ -47,6 +55,16 @@ export function useBrim(): BrimState {
   const v = useContext(Ctx);
   if (!v) throw new Error("useBrim outside BrimProvider");
   return v;
+}
+
+/** Calls fn for every live event while the component is mounted. */
+export function useLiveEvents(fn: (e: BrimEvent) => void): void {
+  const { subscribe } = useBrim();
+  const ref = useRef(fn);
+  useEffect(() => {
+    ref.current = fn;
+  });
+  useEffect(() => subscribe((e) => ref.current(e)), [subscribe]);
 }
 
 export function BrimProvider({ children }: { children: ReactNode }) {
@@ -58,6 +76,8 @@ export function BrimProvider({ children }: { children: ReactNode }) {
   const [recent, setRecent] = useState<Spoken[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [liveHealth, setLiveHealth] = useState<HealthEvent | null>(null);
+  const [faults, setFaults] = useState<FaultEvent[]>([]);
+  const [unreadAlerts, setUnreadAlerts] = useState(0);
 
   const speakingRef = useRef(true);
   const nextId = useRef(1);
@@ -65,6 +85,7 @@ export function BrimProvider({ children }: { children: ReactNode }) {
   const healthWatch = useRef(new HealthWatch(HEALTH_TIMEOUT_MS));
   const streamRef = useRef<EventStream | null>(null);
   const tierOf = useRef(new Map<string, Tier>());
+  const subscribers = useRef(new Set<(e: BrimEvent) => void>());
 
   // What the scheduler lets through is spoken (if speech is on) and shown in "Recently said".
   const scheduler = useMemo(
@@ -111,14 +132,16 @@ export function BrimProvider({ children }: { children: ReactNode }) {
     }
   }, [api]);
 
+  const applySettings = useCallback((s: Settings) => setVoice(s.speech_rate, s.volume), []);
+
   const loadSettings = useCallback(async () => {
     if (!api) return;
     try {
-      setSpeechRate((await api.settings()).speech_rate);
+      applySettings(await api.settings());
     } catch {
-      /* keep the current rate */
+      /* keep the current voice */
     }
-  }, [api]);
+  }, [api, applySettings]);
 
   const handleEvent = useCallback(
     (e: BrimEvent) => {
@@ -129,9 +152,12 @@ export function BrimProvider({ children }: { children: ReactNode }) {
           speak("Connected again.", "status");
         }
       }
+      if (e.type === "fault") setFaults((f) => [e, ...f].slice(0, 20));
+      if (e.type === "safety_alert") setUnreadAlerts((n) => n + 1);
       const a = describeEvent(e);
       const always = a?.tier === "alert" || a?.tier === "nav";
       if (a && deduper.current.shouldAnnounce(a, Date.now(), always)) speak(a.text, a.tier);
+      subscribers.current.forEach((fn) => fn(e));
     },
     [speak],
   );
@@ -214,6 +240,8 @@ export function BrimProvider({ children }: { children: ReactNode }) {
     setHealth(null);
     setLiveHealth(null);
     setRecent([]);
+    setFaults([]);
+    setUnreadAlerts(0);
     setConnection("no-hat");
   }, []);
 
@@ -223,9 +251,36 @@ export function BrimProvider({ children }: { children: ReactNode }) {
     void AsyncStorage.setItem(SPEAK_KEY, on ? "on" : "off");
   }, []);
 
+  const subscribe = useCallback((fn: (e: BrimEvent) => void) => {
+    subscribers.current.add(fn);
+    return () => {
+      subscribers.current.delete(fn);
+    };
+  }, []);
+
+  const clearUnreadAlerts = useCallback(() => setUnreadAlerts(0), []);
+
   const value = useMemo<BrimState>(
-    () => ({ hatUrl, connection, stream, linkLost, speaking, recent, health, liveHealth, pair, forgetHat, setSpeaking }),
-    [hatUrl, connection, stream, linkLost, speaking, recent, health, liveHealth, pair, forgetHat, setSpeaking],
+    () => ({
+      hatUrl,
+      api,
+      connection,
+      stream,
+      linkLost,
+      speaking,
+      recent,
+      health,
+      liveHealth,
+      faults,
+      unreadAlerts,
+      clearUnreadAlerts,
+      subscribe,
+      pair,
+      forgetHat,
+      setSpeaking,
+      applySettings,
+    }),
+    [hatUrl, api, connection, stream, linkLost, speaking, recent, health, liveHealth, faults, unreadAlerts, clearUnreadAlerts, subscribe, pair, forgetHat, setSpeaking, applySettings],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
