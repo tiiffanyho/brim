@@ -1,6 +1,7 @@
 #include "detect/detector.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include "common/log.hpp"
 
@@ -80,32 +81,66 @@ std::unique_ptr<Detector> make_mediapipe_detector(const std::string& models_dir)
   return make_stub_detector();
 }
 
+// ------------------------------------------------------------------ tracks
+
+float TrackStore::match_score(const Box& t, const Box& d) const {
+  const float ov = iou(t, d);
+  if (ov >= same_iou_) return 1.0f + ov;
+  const float ta = t.area(), da = d.area();
+  if (ta <= 0 || da <= 0) return 0;
+  if (std::min(ta, da) / std::max(ta, da) < 0.5f) return 0;  // very different size: not the same thing
+  const float ref = std::max(std::max(t.w, t.h), std::max(d.w, d.h));
+  const float dist = std::hypot(t.cx() - d.cx(), t.cy() - d.cy()) / ref;
+  if (dist >= center_gate_) return 0;
+  return 1.0f - dist / center_gate_ * 0.999f;  // in (0, 1]: always below any overlap match
+}
+
 void TrackStore::observe(std::vector<Detection>& dets, std::int64_t now_ms) {
   expire(now_ms);
-  std::vector<int> taken;
-  taken.reserve(dets.size());
-  for (auto& d : dets) {
-    int best_id = -1;
-    float best = same_iou_;
+  ++observe_count_;
+  pairs_.clear();
+  det_taken_.assign(dets.size(), 0);
+  for (int i = 0; i < static_cast<int>(dets.size()); ++i) {
     for (const auto& [id, t] : tracks_) {
-      if (t.thing != d.thing) continue;
-      if (std::find(taken.begin(), taken.end(), id) != taken.end()) continue;
-      const float s = iou(t.box, d.box);
-      if (s >= best) {
-        best = s;
-        best_id = id;
-      }
+      if (t.thing != dets[i].thing) continue;
+      if (now_ms - t.last_seen_ms > match_window_ms_) continue;  // gone too long: a new track
+      const float s = match_score(t.box, dets[i].box);
+      if (s > 0) pairs_.push_back(Pair{s, i, id});
     }
-    if (best_id < 0) {
-      best_id = next_id_++;
-      tracks_[best_id] = Track{d.thing, d.box, now_ms, -1};
-    } else {
-      tracks_[best_id].box = d.box;
-      tracks_[best_id].last_seen_ms = now_ms;
-    }
-    taken.push_back(best_id);
-    d.track_id = best_id;
   }
+  std::sort(pairs_.begin(), pairs_.end(), [](const Pair& a, const Pair& b) {
+    if (a.score != b.score) return a.score > b.score;
+    if (a.det != b.det) return a.det < b.det;
+    return a.id < b.id;
+  });
+  for (const auto& p : pairs_) {
+    if (det_taken_[p.det]) continue;
+    Track& t = tracks_[p.id];
+    if (t.matched_in_ == observe_count_) continue;
+    t.matched_in_ = observe_count_;
+    t.box = dets[p.det].box;
+    t.last_seen_ms = now_ms;
+    det_taken_[p.det] = 1;
+    dets[p.det].track_id = p.id;
+  }
+  for (int i = 0; i < static_cast<int>(dets.size()); ++i) {
+    if (det_taken_[i]) continue;
+    const int id = next_id_++;
+    Track t;
+    t.thing = dets[i].thing;
+    t.box = dets[i].box;
+    t.last_seen_ms = now_ms;
+    t.matched_in_ = observe_count_;
+    tracks_[id] = t;
+    dets[i].track_id = id;
+  }
+}
+
+std::size_t TrackStore::active(std::int64_t now_ms) const {
+  std::size_t n = 0;
+  for (const auto& kv : tracks_)
+    if (now_ms - kv.second.last_seen_ms <= match_window_ms_) ++n;
+  return n;
 }
 
 void TrackStore::expire(std::int64_t now_ms) {

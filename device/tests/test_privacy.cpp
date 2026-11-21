@@ -41,6 +41,51 @@ TEST_CASE("a person keeps one track id while in view, and a second person gets a
   CHECK_EQ(tracks.size(), 2u);
 }
 
+TEST_CASE("someone walking across the frame keeps one track id") {
+  detect::TrackStore tracks;
+  int id = -1;
+  // 7.5 detections/s (every 2nd frame), crossing left to right in ~2 s, with one missed detection.
+  for (int k = 0; k <= 15; ++k) {
+    if (k == 8) continue;  // detector missed them on this frame
+    std::vector<Detection> f{det(Thing::Person, 0.05f + 0.05f * k, 0.2f, 0.12f, 0.6f)};
+    tracks.observe(f, k * 133);
+    if (id < 0) id = f[0].track_id;
+    CHECK_EQ(f[0].track_id, id);
+  }
+  CHECK_EQ(tracks.size(), 1u);
+}
+
+TEST_CASE("two people crossing paths keep their own ids") {
+  detect::TrackStore tracks;
+  std::vector<Detection> f0{det(Thing::Person, 0.20f, 0.2f), det(Thing::Person, 0.60f, 0.2f)};
+  tracks.observe(f0, 0);
+  const int a = f0[0].track_id, b = f0[1].track_id;
+  // Next frame, listed in the other order and each moved a little towards the other.
+  std::vector<Detection> f1{det(Thing::Person, 0.56f, 0.2f), det(Thing::Person, 0.24f, 0.2f)};
+  tracks.observe(f1, 100);
+  CHECK_EQ(f1[0].track_id, b);
+  CHECK_EQ(f1[1].track_id, a);
+}
+
+TEST_CASE("a track gone for longer than the match window is not handed to someone new") {
+  detect::TrackStore tracks(30 * 60 * 1000, 10000, 0.3f, 1500);
+  std::vector<Detection> f0{det(Thing::Person, 0.40f, 0.2f)};
+  tracks.observe(f0, 0);
+  std::vector<Detection> f1{det(Thing::Person, 0.40f, 0.2f)};
+  tracks.observe(f1, 5000);  // same place, 5 s later: could be anyone
+  CHECK(f1[0].track_id != f0[0].track_id);
+  CHECK_EQ(tracks.active(5000), 1u);
+}
+
+TEST_CASE("a chair never takes over a person's track") {
+  detect::TrackStore tracks;
+  std::vector<Detection> f0{det(Thing::Person, 0.40f, 0.2f)};
+  tracks.observe(f0, 0);
+  std::vector<Detection> f1{det(Thing::Chair, 0.40f, 0.2f)};
+  tracks.observe(f1, 100);
+  CHECK(f1[0].track_id != f0[0].track_id);
+}
+
 TEST_CASE("tracks are cleared after 30 minutes and the person is not recognized again") {
   detect::TrackStore tracks(30 * 60 * 1000);
   std::vector<Detection> f1{det(Thing::Person, 0.10f, 0.2f)};

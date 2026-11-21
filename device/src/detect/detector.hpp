@@ -28,6 +28,7 @@ namespace brim::detect {
 struct Box {
   float x = 0, y = 0, w = 0, h = 0;
   float cx() const { return x + w / 2; }
+  float cy() const { return y + h / 2; }
   float area() const { return w * h; }
 };
 
@@ -78,15 +79,24 @@ schema::Direction direction_of(const Box& b, double side_margin_frac);
 // Image-based closeness estimate. Everything smaller than near_frac is "far".
 schema::Proximity proximity_of(double area_frac, double close_frac, double near_frac);
 
-// Anonymous tracks. Matches this frame's boxes to the previous frame's by overlap, hands out
-// meaningless increasing ids, and forgets everything it has not seen for forget_after_ms.
+// Anonymous tracks. Matches this frame's boxes to recent tracks of the same Thing by overlap
+// (IoU), or — for something moving fast or a frame the detector skipped — by a short centre jump
+// between boxes of similar size. Best matches are taken first, each track and box used once.
+// Hands out meaningless increasing ids and forgets everything it has not seen for forget_after_ms.
 // It holds no appearance data at all — only the last box, so there is nothing to recognize anyone
 // with, in memory or anywhere else.
 class TrackStore {
  public:
   explicit TrackStore(std::int64_t forget_after_ms = 30 * 60 * 1000, std::int64_t repeat_suppress_ms = 10000,
-                      float same_thing_iou = 0.3f)
-      : forget_after_ms_(forget_after_ms), repeat_suppress_ms_(repeat_suppress_ms), same_iou_(same_thing_iou) {}
+                      float same_thing_iou = 0.3f, std::int64_t match_window_ms = 1500, float center_gate = 0.6f)
+      : forget_after_ms_(forget_after_ms),
+        repeat_suppress_ms_(repeat_suppress_ms),
+        same_iou_(same_thing_iou),
+        match_window_ms_(match_window_ms),
+        center_gate_(center_gate) {
+    pairs_.reserve(64);
+    det_taken_.reserve(32);
+  }
 
   // Assigns track ids to `dets` in place (and updates each track's last-seen time).
   void observe(std::vector<Detection>& dets, std::int64_t now_ms);
@@ -97,6 +107,10 @@ class TrackStore {
   // Forget everything right now (used when the pipeline restarts or the camera goes away).
   void clear();
   std::size_t size() const { return tracks_.size(); }
+  // Tracks seen within the match window: things actually in view right now.
+  std::size_t active(std::int64_t now_ms) const;
+  // >1 = overlap match (1 + IoU), (0,1) = centre-jump match, 0 = not the same thing. Exposed for tests.
+  float match_score(const Box& track_box, const Box& det_box) const;
 
  private:
   struct Track {
@@ -104,12 +118,23 @@ class TrackStore {
     Box box;
     std::int64_t last_seen_ms = 0;
     std::int64_t last_announced_ms = -1;
+    std::uint64_t matched_in_ = 0;  // observe() call that last claimed this track
+  };
+  struct Pair {
+    float score;
+    int det;
+    int id;
   };
   std::int64_t forget_after_ms_;
   std::int64_t repeat_suppress_ms_;
   float same_iou_;
+  std::int64_t match_window_ms_;
+  float center_gate_;
   std::map<int, Track> tracks_;
   int next_id_ = 1;
+  std::uint64_t observe_count_ = 0;
+  std::vector<Pair> pairs_;       // reused every frame
+  std::vector<char> det_taken_;   // reused every frame
 };
 
 }  // namespace brim::detect
