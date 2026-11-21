@@ -6,10 +6,10 @@ const base = { seq: 1, source: "brim", t_mono_ms: 1 };
 
 describe("describeEvent", () => {
   it("says every safety alert assertively, as a short phrase", () => {
-    const e: BrimEvent = { ...base, type: "safety_alert", kind: "person_close", severity: "critical", text: "Person close ahead", direction: "ahead" };
+    const e: BrimEvent = { ...base, type: "safety_alert", kind: "person_close", severity: "critical", text: "Person ahead, move left", direction: "ahead" };
     expect(describeEvent(e)?.politeness).toBe("assertive");
     expect(describeEvent(e)?.tier).toBe("alert");
-    expect(describeEvent(e)?.text).toBe("Person close ahead.");
+    expect(describeEvent(e)?.text).toBe("Person ahead, move left.");
     expect(describeEvent({ ...e, severity: "info" })?.politeness).toBe("assertive");
   });
 
@@ -24,8 +24,8 @@ describe("describeEvent", () => {
   });
 
   it("says the safest direction, or 'stop' when there is none, in the polite region at nav priority", () => {
-    expect(describeEvent({ ...base, type: "clear_path", clear: true, direction: "right", text: "Chair ahead, step right" })).toEqual({
-      text: "Chair ahead, step right.",
+    expect(describeEvent({ ...base, type: "clear_path", clear: true, direction: "right", text: "Chair ahead, move right" })).toEqual({
+      text: "Chair ahead, move right.",
       politeness: "polite",
       tier: "nav",
       key: "path:right",

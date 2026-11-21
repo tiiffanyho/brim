@@ -84,6 +84,8 @@ Things to try:
 | `kill -USR1 $(pgrep -x brim)` | Freezes brim's pipeline. The supervisor restarts it in about 1.3 s, and the phone shows *restarting → recovered*. |
 | `scripts/fake_events.py` | Sends extra random events straight into app_server (handy for PWA-only work). |
 | `scripts/smoke_test.sh` | Full end-to-end check (also runs in CI). |
+| `scripts/laptop/object_test.py data/object_test` | Detector accuracy per class (every class Brim maps) on labelled photos; paths in `config/object_test.json`, photos git-ignored. |
+| `scripts/laptop/object_live.py` | The same test live on the webcam: point it at things, press a key for what is there, get the per-class table. Untested classes are skipped. Nothing is saved. |
 | `cd device && ctest --preset host` | C++ unit tests: schema, detection geometry, privacy, speak queue, SQLite layer, REST API. |
 | `cd app && npm test && npm run lint && npm run typecheck` | PWA tests, jsx-a11y lint, types. |
 

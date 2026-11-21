@@ -16,17 +16,21 @@ import time
 
 DIRECTIONS = ["left", "ahead", "right"]
 OBSTACLES = ["chair", "table", "door", "pole", "stairs", "bicycle", "obstacle"]
+# Close warnings sent on their own, with no confirmed way out, so they say stop (as brim does
+# while it is unsure). With a confirmed side brim says e.g. "Person ahead, move left".
 SAFETY = [
-    ("person_close", "critical", "Person close ahead"),
-    ("object_close", "warning", "Chair close ahead"),
-    ("object_close", "critical", "Wall close ahead"),
+    ("person_close", "critical", "Person ahead, stop"),
+    ("object_close", "warning", "Path unclear, stop"),
     ("phone_raised", "warning", "A phone is pointed at you"),
 ]
-# Navigation advice: a direction we are sure about, or "stop" when nothing is clear.
+# Navigation advice in brim's words (device/src/nav/nav.cpp text_for): a direction we are sure
+# about, or stop when nothing is clear.
 PATHS = [
     (True, "ahead", "Clear path ahead", []),
-    (True, "right", "Chair ahead, step right", ["ahead"]),
-    (True, "left", "Person close ahead, step left", ["ahead", "right"]),
+    (True, "right", "Chair ahead, move right", ["ahead"]),
+    (True, "left", "Person ahead, move left", ["ahead", "right"]),
+    (True, "right", "Chair on your left, move right", ["left"]),
+    (False, "unknown", "Person ahead, stop", ["left", "ahead", "right"]),
     (False, "unknown", "Path unclear, stop", ["left", "ahead", "right"]),
 ]
 
