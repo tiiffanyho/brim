@@ -91,6 +91,12 @@ target_link_libraries(brim_dashboard PUBLIC brim_common)
 add_executable(brim src/brim_main.cpp)
 target_link_libraries(brim PRIVATE brim_pipeline brim_ipc)
 
+# Laptop test tool: brim's decisions for detector rows on stdin (scripts/laptop/brim_test.py live).
+if(NOT BRIM_IS_QNX)
+  add_executable(decide_probe tools/decide_probe.cpp)
+  target_link_libraries(decide_probe PRIVATE brim_pipeline)
+endif()
+
 add_executable(supervisor
   src/supervisor/supervisor_main.cpp
   src/supervisor/child.cpp
@@ -148,6 +154,7 @@ if(BRIM_BUILD_TESTS)
   brim_test(test_privacy brim_pipeline)
   brim_test(test_detect brim_pipeline)
   brim_test(test_nav brim_pipeline)
+  brim_test(test_safety brim_pipeline)
   if(BRIM_BUILD_APP_SERVER)
     brim_test(test_db brim_db)
     brim_test(test_api brim_api)
