@@ -1,95 +1,77 @@
-// Root: pair first, then five tabs. A plain tab bar (no navigation library) keeps the native
-// build unchanged; it is a VoiceOver tab bar with the selected tab and unread alerts announced.
+// Root. First run: onboarding (hello, connect a hat or the laptop camera, hear Brim, start). Then
+// the Live screen, with Settings behind the button in the top right; Alerts, Activity and Hat
+// health open from Settings. No navigation library: keeps the native build unchanged.
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { StatusBar } from "expo-status-bar";
-import { useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { BrimProvider, useBrim } from "./src/BrimContext";
 import { ActivityScreen } from "./src/screens/Activity";
 import { AlertsScreen } from "./src/screens/Alerts";
 import { HealthScreen } from "./src/screens/Health";
-import { NowScreen } from "./src/screens/Now";
-import { PairScreen } from "./src/screens/Pair";
-import { SettingsScreen } from "./src/screens/Settings";
-import { useColors } from "./src/ui";
+import { LiveScreen } from "./src/screens/Live";
+import { OnboardingScreen } from "./src/screens/Onboarding";
+import { SettingsScreen, type SubPage } from "./src/screens/Settings";
+import { T } from "./src/theme";
+import { BackContext } from "./src/ui";
 
-const TABS = [
-  { key: "now", label: "Now", Component: NowScreen },
-  { key: "activity", label: "Activity", Component: ActivityScreen },
-  { key: "alerts", label: "Alerts", Component: AlertsScreen },
-  { key: "settings", label: "Settings", Component: SettingsScreen },
-  { key: "health", label: "Health", Component: HealthScreen },
-] as const;
-type TabKey = (typeof TABS)[number]["key"];
+const ONBOARDED_KEY = "brim.onboarded";
+type View_ = "live" | "settings" | SubPage;
 
 function Root() {
-  const c = useColors();
-  const { connection, unreadAlerts } = useBrim();
-  const [tab, setTab] = useState<TabKey>("now");
+  const { connection } = useBrim();
+  const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  const [view, setView] = useState<View_>("live");
 
-  if (connection === "loading")
+  useEffect(() => {
+    void AsyncStorage.getItem(ONBOARDED_KEY).then((v) => setOnboarded(v === "1"));
+  }, []);
+
+  if (connection === "loading" || onboarded === null)
     return (
-      <View style={[styles.fill, styles.center, { backgroundColor: c.bg }]}>
-        <ActivityIndicator accessibilityLabel="Loading" />
+      <View style={[styles.fill, styles.center]}>
+        <ActivityIndicator accessibilityLabel="Loading" color={T.button} />
       </View>
     );
-  if (connection === "no-hat" || connection === "unpaired") return <PairScreen />;
 
-  const Active = TABS.find((t) => t.key === tab)!.Component;
+  // No hat or camera yet (or the hat forgot this phone): onboarding. Returning users skip hello.
+  const needsConnect = connection === "no-hat" || connection === "unpaired";
+  if (!onboarded || needsConnect)
+    return (
+      <OnboardingScreen
+        key="onboarding"
+        start={onboarded || connection === "unpaired" ? 1 : 0}
+        onDone={() => {
+          void AsyncStorage.setItem(ONBOARDED_KEY, "1");
+          setOnboarded(true);
+          setView("live");
+        }}
+      />
+    );
+
+  if (view === "live") return <LiveScreen key="live" openSettings={() => setView("settings")} />;
+  if (view === "settings") return <SettingsScreen key="settings" onDone={() => setView("live")} open={setView} />;
+
+  const Sub = view === "alerts" ? AlertsScreen : view === "activity" ? ActivityScreen : HealthScreen;
   return (
-    <View style={[styles.fill, { backgroundColor: c.bg }]}>
-      <View style={styles.fill}>
-        {/* key: remount on tab change so the new screen's title gets VoiceOver focus */}
-        <Active key={tab} />
-      </View>
-      <View style={[styles.bar, { backgroundColor: c.card, borderTopColor: c.border }]}>
-        <View accessibilityRole="tablist" style={styles.tabs}>
-          {TABS.map((t) => {
-            const selected = t.key === tab;
-            const badge = t.key === "alerts" ? unreadAlerts : 0;
-            return (
-              <Pressable
-                key={t.key}
-                accessibilityRole="tab"
-                accessibilityLabel={badge ? `${t.label}, ${badge} new` : t.label}
-                accessibilityState={{ selected }}
-                onPress={() => setTab(t.key)}
-                style={styles.tab}
-              >
-                <Text style={[styles.tabText, { color: selected ? c.accent : c.muted }, selected && styles.tabSelected]}>{t.label}</Text>
-                {badge > 0 ? (
-                  <View style={[styles.badge, { backgroundColor: c.danger }]}>
-                    <Text style={[styles.badgeText, { color: c.bg }]}>{badge > 99 ? "99+" : badge}</Text>
-                  </View>
-                ) : null}
-                {selected ? <View style={[styles.underline, { backgroundColor: c.accent }]} /> : null}
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
-    </View>
+    <BackContext.Provider value={{ label: "Settings", onBack: () => setView("settings") }}>
+      <Sub key={view} />
+    </BackContext.Provider>
   );
 }
 
 export default function App() {
   return (
     <BrimProvider>
-      <StatusBar style="auto" />
-      <Root />
+      <StatusBar style="dark" />
+      <View style={styles.fill}>
+        <Root />
+      </View>
     </BrimProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  fill: { flex: 1 },
+  fill: { flex: 1, backgroundColor: T.bg },
   center: { justifyContent: "center", alignItems: "center" },
-  // paddingBottom clears the iPhone home indicator (no safe-area package: keeps the native build unchanged).
-  bar: { borderTopWidth: StyleSheet.hairlineWidth, paddingBottom: 26 },
-  tabs: { flexDirection: "row" },
-  tab: { flex: 1, minHeight: 56, alignItems: "center", justifyContent: "center", paddingVertical: 6 },
-  tabText: { fontSize: 15, fontWeight: "600" },
-  tabSelected: { fontWeight: "800" },
-  underline: { position: "absolute", bottom: 4, height: 3, width: 28, borderRadius: 2 },
-  badge: { position: "absolute", top: 4, right: 8, minWidth: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
-  badgeText: { fontSize: 12, fontWeight: "800" },
 });

@@ -11,11 +11,12 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "isolatedModules": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "noEmit": true,
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": { "@schema": ["../shared/gen/events.ts"] }
   },
-  "include": ["src", "../shared/gen/events.ts"]
+  "include": ["src", "../shared/gen/events.ts", "../config/*.json"]
 }
