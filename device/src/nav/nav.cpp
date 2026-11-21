@@ -58,7 +58,7 @@ FrameDecision decide_frame(const std::vector<Detection>& dets, const config::Nav
   // Only things that are big enough to be close count. Closeness is box area: no distance sensor.
   std::vector<const Detection*> blockers;
   for (const auto& d : dets) {
-    if (d.thing == Thing::Phone) continue;          // watched by safety, never an obstacle
+    if (!detect::is_obstacle(d.thing)) continue;    // phones (safety) and traffic lights: never in the way
     if (d.score < min_confidence) continue;         // never act on what we did not clearly see
     if (d.box.area() <= t.clear_max_area_frac) continue;  // small = far: not in the way yet
     blockers.push_back(&d);

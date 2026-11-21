@@ -116,7 +116,8 @@ class TfliteDetector final : public Detector {
     int n = static_cast<int>(*static_cast<const float*>(TfLiteTensorData(out_[3])));
     if (n < 0) n = 0;
     if (n > max_n_) n = max_n_;
-    decode_detections(boxes, classes, scores, n, cfg_.min_confidence, cfg_.phone_min_confidence, out);
+    decode_detections(boxes, classes, scores, n, cfg_.min_confidence, cfg_.phone_min_confidence, out,
+                      cfg_.traffic_min_confidence);
     times_.decode_ms = ms_since(t);
   }
 

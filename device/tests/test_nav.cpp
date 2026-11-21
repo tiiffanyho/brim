@@ -189,6 +189,19 @@ TEST_CASE("phones and unsure boxes are never obstacles; unknown things are 'some
   CHECK_EQ(calls[0].text, std::string("Something on your left, step right"));
 }
 
+TEST_CASE("a traffic light is never an obstacle: no call, and it never changes a call") {
+  nav::Navigator n(cfg(), kMinConf);
+  std::int64_t t = 0;
+  // A big, confident traffic light right in the corridor (a screen at hat height, close up).
+  const auto light = det(Thing::TrafficLight, 0.35f, 0.40f, 0.30f, 0.55f, 0.95f);
+  CHECK_EQ(feed(n, {light}, 10, t).size(), 0u);
+  CHECK(nav::decide_frame({light}, cfg(), kMinConf).kind == nav::FrameDecision::Kind::NoCall);
+  // With a chair on the left the advice is exactly what the chair alone gives.
+  auto calls = feed(n, {chair_left(), light}, 10, t);
+  REQUIRE(calls.size() == 1u);
+  CHECK_EQ(calls[0].text, std::string("Chair on your left, step right"));
+}
+
 TEST_CASE("obstacles on both sides with a gap in the middle: clear path ahead") {
   nav::Navigator n(cfg(), kMinConf);
   std::int64_t t = 0;

@@ -36,7 +36,8 @@ std::unique_ptr<SafetyMonitor> make_stub_safety_monitor();
 //   SafetyThresholds, direction from NavThresholds) and phone_raised from a held-phone classifier
 //   on the MediaPipe object detector's "cell phone" class plus hand landmarks (mediapipe 0.10.26,
 //   tflite-runtime 2.21.0 from oss.qnx.com). Hold an alert for repeat_suppress_s so one obstacle is
-//   not announced every frame.
+//   not announced every frame. object_close must use detect::is_obstacle(): a traffic light is
+//   never an obstacle and never raises a safety alert.
 std::unique_ptr<SafetyMonitor> make_vision_safety_monitor(const config::SafetyThresholds& safety,
                                                           const config::NavThresholds& nav);
 

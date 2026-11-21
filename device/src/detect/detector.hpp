@@ -36,13 +36,18 @@ struct Box {
 float iou(const Box& a, const Box& b);
 
 // What the detector found. Kept separate from schema::ObstacleKind because a phone is something we
-// watch for (a privacy alert) but never something to walk around.
-enum class Thing { Person, Phone, Chair, Table, Door, Pole, Stairs, Vehicle, Bicycle, Unknown };
+// watch for (a privacy alert) but never something to walk around, and a traffic light (feasibility
+// test, see detect/traffic_light.hpp) is something we report but never something in the way.
+enum class Thing { Person, Phone, Chair, Table, Door, Pole, Stairs, Vehicle, Bicycle, TrafficLight, Unknown };
 const char* to_string(Thing t);
 
-// What we are allowed to call this out loud. Phone -> nullopt (never announced as an obstacle);
-// Unknown -> ObstacleKind::Obstacle, i.e. "something is there" without naming it.
+// What we are allowed to call this out loud. Phone and TrafficLight -> nullopt (never announced as
+// an obstacle); Unknown -> ObstacleKind::Obstacle, i.e. "something is there" without naming it.
 std::optional<schema::ObstacleKind> obstacle_kind_of(Thing t);
+
+// Does this thing count for the clear-path and safety corridor logic? False for a phone (watched
+// by safety as a privacy alert) and a traffic light (reported, never in the way).
+bool is_obstacle(Thing t);
 
 struct Detection {
   Thing thing = Thing::Unknown;
@@ -87,6 +92,7 @@ struct DetectorConfig {
   int threads = 4;
   float min_confidence = 0.60f;        // safety.json min_confidence: below this a box is dropped
   float phone_min_confidence = 0.55f;  // safety.json phone_min_confidence: phones only, for the safety alert
+  float traffic_min_confidence = 0.60f;  // traffic.json min_score: traffic lights only
 };
 // When brim is built without TFLite (BRIM_WITH_TFLITE=OFF) this returns a detector whose load()
 // fails and which reports itself unhealthy, so brim speaks "cannot see" instead of guessing.
@@ -115,9 +121,11 @@ class RgbResizer {
 
 // TFLite_Detection_PostProcess outputs -> detections. boxes are [ymin, xmin, ymax, xmax] in
 // [0,1] (clamped here; the model can return slightly outside), classes are COCO-90 indices.
-// Appends to `out` (does not clear). Ignored classes and low scores are dropped.
+// Appends to `out` (does not clear). Ignored classes and low scores are dropped. Traffic lights use
+// traffic_min_confidence; a negative value means "same as min_confidence".
 void decode_detections(const float* boxes, const float* classes, const float* scores, int count,
-                       float min_confidence, float phone_min_confidence, std::vector<Detection>& out);
+                       float min_confidence, float phone_min_confidence, std::vector<Detection>& out,
+                       float traffic_min_confidence = -1.0f);
 
 // Runs the detector every frame, or every 2nd frame while it is over budget (with hysteresis so
 // it does not flap). fixed_stride 1 or 2 forces that stride; 0 = automatic.

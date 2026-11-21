@@ -46,6 +46,25 @@ TEST_CASE("a phone is watched for but never called an obstacle") {
   REQUIRE(detect::obstacle_kind_of(Thing::Unknown).has_value());
   CHECK(*detect::obstacle_kind_of(Thing::Unknown) == s::ObstacleKind::Obstacle);
   CHECK_EQ(std::string(detect::to_string(Thing::Unknown)), "obstacle");
+  // Phones and traffic lights stay out of the clear-path and safety corridor logic.
+  CHECK(!detect::is_obstacle(Thing::Phone));
+  CHECK(!detect::is_obstacle(Thing::TrafficLight));
+  CHECK(!detect::obstacle_kind_of(Thing::TrafficLight).has_value());
+  for (auto t : {Thing::Person, Thing::Chair, Thing::Table, Thing::Pole, Thing::Vehicle, Thing::Unknown})
+    CHECK(detect::is_obstacle(t));
+}
+
+TEST_CASE("decode: a traffic light uses its own threshold from traffic.json") {
+  const float boxes[] = {0.05f, 0.45f, 0.40f, 0.55f, 0.05f, 0.45f, 0.40f, 0.55f};
+  const float classes[] = {9, 9};
+  const float scores[] = {0.52f, 0.47f};
+  std::vector<detect::Detection> out;
+  detect::decode_detections(boxes, classes, scores, 2, 0.60f, 0.55f, out);  // default: same as min_confidence
+  CHECK_EQ(out.size(), 0u);
+  detect::decode_detections(boxes, classes, scores, 2, 0.60f, 0.55f, out, 0.50f);
+  REQUIRE(out.size() == 1u);
+  CHECK(out[0].thing == Thing::TrafficLight);
+  CHECK(std::abs(out[0].score - 0.52f) < 1e-6f);
 }
 
 TEST_CASE("the stub detector sees nothing and says it is healthy") {
@@ -64,6 +83,7 @@ TEST_CASE("COCO classes map to what Brim may say, and nothing else") {
   CHECK(*detect::thing_of_coco(61) == Thing::Chair);
   CHECK(*detect::thing_of_coco(66) == Thing::Table);
   CHECK(*detect::thing_of_coco(76) == Thing::Phone);
+  CHECK(*detect::thing_of_coco(9) == Thing::TrafficLight);  // feasibility test only
   for (int c : {14, 26, 32, 62}) CHECK(*detect::thing_of_coco(c) == Thing::Unknown);  // "something ahead"
   for (int c : {-1, 4, 15, 16, 43, 75, 89, 90, 1000}) CHECK(!detect::thing_of_coco(c).has_value());
 }

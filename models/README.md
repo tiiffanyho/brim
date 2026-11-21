@@ -43,7 +43,9 @@ Tensors (from `scripts/probe_model.py models/efficientdet_lite0.tflite`):
 
 Classes Brim uses (everything else is ignored): 0 person; 1 bicycle; 2 car, 3 motorcycle, 5 bus,
 7 truck → vehicle; 61 chair; 66 dining table → table; 76 cell phone → phone (safety only, never an
-obstacle); 14 bench, 26 backpack, 32 suitcase, 62 couch → "something" (never named).
+obstacle); 14 bench, 26 backpack, 32 suitcase, 62 couch → "something" (never named); 9 traffic
+light → traffic light (feasibility test only, never an obstacle; threshold `min_score` in
+`config/traffic.json`).
 Scores below `min_confidence` (0.60, `config/safety.json`) are dropped; phones use
 `phone_min_confidence` (0.55) so the safety module can judge them.
 

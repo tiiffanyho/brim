@@ -28,6 +28,7 @@ const char* to_string(Thing t) {
     case Thing::Stairs: return "stairs";
     case Thing::Vehicle: return "vehicle";
     case Thing::Bicycle: return "bicycle";
+    case Thing::TrafficLight: return "traffic light";
     case Thing::Unknown: return "obstacle";
   }
   return "obstacle";
@@ -45,9 +46,12 @@ std::optional<schema::ObstacleKind> obstacle_kind_of(Thing t) {
     case Thing::Bicycle: return schema::ObstacleKind::Bicycle;
     case Thing::Unknown: return schema::ObstacleKind::Obstacle;  // "something is there"
     case Thing::Phone: return std::nullopt;                      // never an obstacle
+    case Thing::TrafficLight: return std::nullopt;               // reported, never an obstacle
   }
   return std::nullopt;
 }
+
+bool is_obstacle(Thing t) { return t != Thing::Phone && t != Thing::TrafficLight; }
 
 schema::Direction direction_of(const Box& b, double side_margin_frac) {
   const double m = side_margin_frac <= 0 || side_margin_frac >= 0.5 ? 0.33 : side_margin_frac;
@@ -88,6 +92,7 @@ std::optional<Thing> thing_of_coco(int c) {
     case 5:   // bus
     case 7:   // truck
       return Thing::Vehicle;
+    case 9: return Thing::TrafficLight;  // feasibility test only: never an obstacle, never a direction
     case 61: return Thing::Chair;
     case 66: return Thing::Table;  // dining table
     case 76: return Thing::Phone;  // cell phone: watched by safety, never an obstacle
@@ -143,14 +148,15 @@ void RgbResizer::resize(const std::uint8_t* src, int sw, int sh, std::uint8_t* d
 }
 
 void decode_detections(const float* boxes, const float* classes, const float* scores, int count, float min_conf,
-                       float phone_min_conf, std::vector<Detection>& out) {
+                       float phone_min_conf, std::vector<Detection>& out, float traffic_min_conf) {
+  if (traffic_min_conf < 0) traffic_min_conf = min_conf;
   auto clamp01 = [](float v) { return v < 0 ? 0.0f : (v > 1 ? 1.0f : v); };
   for (int i = 0; i < count; ++i) {
     const float score = scores[i];
     if (!(score >= 0.0f && score <= 1.0f)) continue;  // NaN or garbage: never trust it
     auto thing = thing_of_coco(static_cast<int>(std::lround(classes[i])));
     if (!thing) continue;
-    const float need = *thing == Thing::Phone ? phone_min_conf : min_conf;
+    const float need = *thing == Thing::Phone ? phone_min_conf : *thing == Thing::TrafficLight ? traffic_min_conf : min_conf;
     if (score < need) continue;
     const float* b = boxes + 4 * i;  // ymin, xmin, ymax, xmax
     const float y0 = clamp01(b[0]), x0 = clamp01(b[1]), y1 = clamp01(b[2]), x1 = clamp01(b[3]);
