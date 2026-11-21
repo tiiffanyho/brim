@@ -62,6 +62,26 @@ install_one tflite-runtime-dev || warn "tflite-runtime-dev missing: the detector
 install_one opencv-dev         || warn "opencv-dev missing: only needed if the detector uses OpenCV"
 
 [ "$MISSING_CORE" = 0 ] || die "a core build tool is missing (see MISSING above). Send this output to Claude."
+
+# The detector's model file is git-ignored (models/README.md has its source, licence and checksum).
+# Download it once (about 4.5 MB) and check it's exactly the expected file.
+MODEL="$REPO/models/efficientdet_lite0.tflite"
+MODEL_URL="https://storage.googleapis.com/download.tensorflow.org/models/tflite/task_library/object_detection/rpi/lite-model_efficientdet_lite0_detection_metadata_1.tflite"
+MODEL_SHA="2e04c53bfeac0ac2a30c057c7e2a777594ce39baaac35a92f74fb1e8c4fc4e0b"
+MODEL_BYTES=4563519
+if [ ! -s "$MODEL" ]; then
+  echo "  downloading the detector model (EfficientDet-Lite0, Apache 2.0)..."
+  curl -fsSL -o "$MODEL" "$MODEL_URL" || { rm -f "$MODEL"; warn "model download failed: the detector will report a fault until models/efficientdet_lite0.tflite exists"; }
+fi
+if [ -s "$MODEL" ]; then
+  SIZE=$(wc -c < "$MODEL" | tr -d ' ')
+  SUM=$( (sha256sum "$MODEL" 2>/dev/null || openssl dgst -sha256 "$MODEL" 2>/dev/null) | tr ' ' '\n' | grep -E '^[0-9a-f]{64}$' | head -1)
+  if [ "$SIZE" != "$MODEL_BYTES" ] || { [ -n "$SUM" ] && [ "$SUM" != "$MODEL_SHA" ]; }; then
+    rm -f "$MODEL"; warn "the model file was wrong (size $SIZE); deleted it. Run this script again."
+  else
+    echo "  ok   model efficientdet_lite0.tflite ($SIZE bytes${SUM:+, checksum matches})"
+  fi
+fi
 [ "$APP_SERVER" = ON ] || warn "sqlite/libwebsockets dev packages missing: building WITHOUT app_server (no phone app yet)"
 
 # --- 3. Compile --------------------------------------------------------------------------------
