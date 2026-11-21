@@ -90,7 +90,9 @@ export function LiveScreen() {
   const quote = activeFault
     ? activeFault.message
     : guiding
-      ? `${liveAlert.e.text}. ${said.text}.`
+      ? liveAlert.e.text === said.text
+        ? `${said.text}.` // one phrase: the warning already says what to do
+        : `${liveAlert.e.text}. ${said.text}.`
       : (said?.text ?? "Listening. Checking the path ahead.");
   const status = activeFault
     ? "Hat problem"
@@ -102,7 +104,7 @@ export function LiveScreen() {
           ? "Obstacle ahead"
           : tone === "safe"
             ? "Back to normal"
-            : "Walking · all clear";
+            : "All clear";
 
   const blocked = new Set<Direction>(livePath?.clear === false ? ["left", "ahead", "right"] : (livePath?.blocked ?? []));
   const next = activeFault
@@ -111,8 +113,8 @@ export function LiveScreen() {
       ? !livePath.clear
         ? "Stop and wait. Brim will say when a path clears."
         : livePath.direction === "ahead"
-          ? "Keep going straight"
-          : `Step ${livePath.direction}, then keep going straight`
+          ? "Path ahead is clear"
+          : `Move ${livePath.direction}`
       : null;
 
   return (
@@ -181,12 +183,12 @@ export function LiveScreen() {
         )}
         {next && (
           <div className="next">
-            <span className="kicker">{activeFault ? "To fix" : "Next step"}</span>
+            <span className="kicker">{activeFault ? "To fix" : "What to do"}</span>
             <p>{next}</p>
           </div>
         )}
       </section>
-      <p className="muted center">Everything here is also spoken in your earpiece.</p>
+      <p className="muted center">Everything here is also read out by your screen reader.</p>
     </section>
   );
 }
