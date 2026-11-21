@@ -16,8 +16,7 @@ class CpuMeter {
 };
 
 // SoC temperature in °C if known.
-// TODO(hw)/TODO(qnx-check): no /sys/class/thermal on QNX. Find how the Pi 5 BSP exposes the
-//   BCM2712 thermal sensor (a devctl on a /dev/ node, or the mailbox property interface).
+// On the Pi 5 QNX image this reads /dev/thermal (text, degrees C); nullopt when unavailable.
 std::optional<double> soc_temp_c();
 
 }  // namespace brim::sysinfo

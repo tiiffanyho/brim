@@ -11,6 +11,7 @@
 // Per-frame path is allocation-free: the frame is resized straight into the interpreter's input
 // tensor (resize tables built once), and detections go into the caller's reused vector.
 // No face model. Frames are never copied anywhere but the input tensor, never written to disk.
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -20,6 +21,9 @@
 
 #if defined(BRIM_WITH_TFLITE)
 #include "tensorflow/lite/c/c_api.h"
+// XNNPACK: TFLite's fast ARM kernels. The header is vendored in device/third_party/tflite (the
+// oss.qnx.com package exports the functions but doesn't ship the header). See its README.
+#include "tensorflow/lite/delegates/xnnpack/xnnpack_delegate.h"
 #endif
 
 namespace brim::detect {
@@ -35,6 +39,7 @@ class TfliteDetector final : public Detector {
   explicit TfliteDetector(DetectorConfig cfg) : cfg_(std::move(cfg)) {}
   ~TfliteDetector() override {
     if (interp_) TfLiteInterpreterDelete(interp_);
+    if (xnnpack_) TfLiteXNNPackDelegateDelete(xnnpack_);  // after the interpreter that used it
     if (opts_) TfLiteInterpreterOptionsDelete(opts_);
     if (model_) TfLiteModelDelete(model_);
   }
@@ -44,6 +49,23 @@ class TfliteDetector final : public Detector {
     if (!model_) return fail("cannot load model " + cfg_.model_path + " (copy it to models/, see models/README.md)");
     opts_ = TfLiteInterpreterOptionsCreate();
     TfLiteInterpreterOptionsSetNumThreads(opts_, cfg_.threads);
+
+    // Switch on XNNPACK for this uint8 model. Without it TFLite runs quantized ops on slow
+    // reference kernels: measured ~360 ms per frame on the Pi 5 (budget 30 ms). QU8 = uint8
+    // models like ours, QS8 = int8 ones; neither is on by default in this build.
+    // Set BRIM_XNNPACK=0 to turn it off (to compare, or if a model misbehaves with it).
+    const char* xnn_env = std::getenv("BRIM_XNNPACK");
+    if (xnn_env == nullptr || std::strcmp(xnn_env, "0") != 0) {
+      TfLiteXNNPackDelegateOptions xo = TfLiteXNNPackDelegateOptionsDefault();
+      xo.num_threads = cfg_.threads;
+      xo.flags |= TFLITE_XNNPACK_DELEGATE_FLAG_QU8 | TFLITE_XNNPACK_DELEGATE_FLAG_QS8;
+      xnnpack_ = TfLiteXNNPackDelegateCreate(&xo);
+      if (xnnpack_) {
+        TfLiteInterpreterOptionsAddDelegate(opts_, xnnpack_);
+      } else {
+        BRIM_LOGW("detect", "XNNPACK delegate could not be created; using TFLite's default kernels");
+      }
+    }
     // TODO(qnx-check): TFLite's worker threads inherit brim's scheduling; check with `pidin -p brim`
     //   that they run at the pipeline's priority and not below app_server.
     interp_ = TfLiteInterpreterCreate(model_, opts_);
@@ -73,8 +95,8 @@ class TfliteDetector final : public Detector {
     std::memset(TfLiteTensorData(input_), 0, TfLiteTensorByteSize(input_));
     const std::int64_t t0 = timing::mono_ns();
     if (TfLiteInterpreterInvoke(interp_) != kTfLiteOk) return fail("warm-up invoke failed");
-    BRIM_LOGI("detect", "loaded %s: input %dx%d uint8, up to %d boxes, %d threads, warm-up %.1f ms", cfg_.model_path.c_str(),
-              in_w_, in_h_, max_n_, cfg_.threads, ms_since(t0));
+    BRIM_LOGI("detect", "loaded %s: input %dx%d uint8, up to %d boxes, %d threads, XNNPACK %s, warm-up %.1f ms",
+              cfg_.model_path.c_str(), in_w_, in_h_, max_n_, cfg_.threads, xnnpack_ ? "on" : "off", ms_since(t0));
     healthy_ = true;
     return true;
   }
@@ -135,6 +157,7 @@ class TfliteDetector final : public Detector {
   TfLiteModel* model_ = nullptr;
   TfLiteInterpreterOptions* opts_ = nullptr;
   TfLiteInterpreter* interp_ = nullptr;
+  TfLiteDelegate* xnnpack_ = nullptr;  // owned; deleted after interp_
   TfLiteTensor* input_ = nullptr;
   const TfLiteTensor* out_[4] = {nullptr, nullptr, nullptr, nullptr};
   int in_w_ = 0, in_h_ = 0, max_n_ = 0;

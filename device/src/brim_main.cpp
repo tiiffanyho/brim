@@ -299,6 +299,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
   std::int64_t start = timing::mono_ms();
   std::int64_t fps_window_start = start;
   int fps_frames = 0;
+  int fps_log_windows = 0;
   bool detect_was_healthy = true;
 
   while (!g_stop) {
@@ -320,6 +321,10 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       c.stats.fps = fps_frames * 1000.0 / static_cast<double>(now - fps_window_start);
       fps_frames = 0;
       fps_window_start = now;
+      // Every 5 s, put the frame rate in the log so a person on the Pi can see the camera is live
+      // (`sh scripts/pi/check.sh` greps for it). Health events carry it to the app every second.
+      if (++fps_log_windows % 5 == 0) BRIM_LOGI("capture", "%.1f fps (frame %llu)", c.stats.fps.load(),
+                                               static_cast<unsigned long long>(frame.index));
     }
 
     if (c.fake && c.fake_chair.empty()) {
