@@ -81,6 +81,93 @@ std::unique_ptr<Detector> make_mediapipe_detector(const std::string& models_dir)
   return make_stub_detector();
 }
 
+// ------------------------------------------------------------------ model output helpers
+
+std::optional<Thing> thing_of_coco(int c) {
+  // Indices are the model's own labelmap.txt (COCO-90, 0-based, gaps kept as "???").
+  switch (c) {
+    case 0: return Thing::Person;
+    case 1: return Thing::Bicycle;
+    case 2:   // car
+    case 3:   // motorcycle
+    case 5:   // bus
+    case 7:   // truck
+      return Thing::Vehicle;
+    case 61: return Thing::Chair;
+    case 66: return Thing::Table;  // dining table
+    case 76: return Thing::Phone;  // cell phone: watched by safety, never an obstacle
+    case 14:  // bench
+    case 26:  // backpack
+    case 32:  // suitcase
+    case 62:  // couch
+      return Thing::Unknown;  // in the way, but only ever called "something"
+    default: return std::nullopt;
+  }
+}
+
+void RgbResizer::build(int sw, int sh, int dw, int dh) {
+  sw_ = sw, sh_ = sh, dw_ = dw, dh_ = dh;
+  x0_.resize(dw), x1_.resize(dw), fx_.resize(dw);
+  y0_.resize(dh), y1_.resize(dh), fy_.resize(dh);
+  auto axis = [](int s, int d, std::vector<int>& a0, std::vector<int>& a1, std::vector<std::uint16_t>& f, int mul) {
+    const double scale = static_cast<double>(s) / d;
+    for (int i = 0; i < d; ++i) {
+      double src = (i + 0.5) * scale - 0.5;  // pixel-centre aligned
+      if (src < 0) src = 0;
+      int i0 = static_cast<int>(src);
+      if (i0 > s - 1) i0 = s - 1;
+      const int i1 = i0 + 1 < s ? i0 + 1 : s - 1;
+      a0[i] = i0 * mul;
+      a1[i] = i1 * mul;
+      f[i] = static_cast<std::uint16_t>(std::lround((src - i0) * 256.0));
+    }
+  };
+  axis(sw, dw, x0_, x1_, fx_, 3);
+  axis(sh, dh, y0_, y1_, fy_, 1);
+}
+
+void RgbResizer::resize(const std::uint8_t* src, int sw, int sh, std::uint8_t* dst, int dw, int dh) {
+  if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+  if (sw != sw_ || sh != sh_ || dw != dw_ || dh != dh_) build(sw, sh, dw, dh);  // only on size change
+  const int stride = sw * 3;
+  for (int y = 0; y < dh; ++y) {
+    const std::uint8_t* r0 = src + static_cast<std::size_t>(y0_[y]) * stride;
+    const std::uint8_t* r1 = src + static_cast<std::size_t>(y1_[y]) * stride;
+    const std::uint32_t wy = fy_[y], iy = 256 - wy;
+    std::uint8_t* o = dst + static_cast<std::size_t>(y) * dw * 3;
+    for (int x = 0; x < dw; ++x) {
+      const int a = x0_[x], b = x1_[x];
+      const std::uint32_t wx = fx_[x], ix = 256 - wx;
+      for (int ch = 0; ch < 3; ++ch) {
+        const std::uint32_t top = r0[a + ch] * ix + r0[b + ch] * wx;
+        const std::uint32_t bot = r1[a + ch] * ix + r1[b + ch] * wx;
+        *o++ = static_cast<std::uint8_t>((top * iy + bot * wy + 32768) >> 16);
+      }
+    }
+  }
+}
+
+void decode_detections(const float* boxes, const float* classes, const float* scores, int count, float min_conf,
+                       float phone_min_conf, std::vector<Detection>& out) {
+  auto clamp01 = [](float v) { return v < 0 ? 0.0f : (v > 1 ? 1.0f : v); };
+  for (int i = 0; i < count; ++i) {
+    const float score = scores[i];
+    if (!(score >= 0.0f && score <= 1.0f)) continue;  // NaN or garbage: never trust it
+    auto thing = thing_of_coco(static_cast<int>(std::lround(classes[i])));
+    if (!thing) continue;
+    const float need = *thing == Thing::Phone ? phone_min_conf : min_conf;
+    if (score < need) continue;
+    const float* b = boxes + 4 * i;  // ymin, xmin, ymax, xmax
+    const float y0 = clamp01(b[0]), x0 = clamp01(b[1]), y1 = clamp01(b[2]), x1 = clamp01(b[3]);
+    if (x1 - x0 <= 0.0f || y1 - y0 <= 0.0f) continue;
+    Detection d;
+    d.thing = *thing;
+    d.box = Box{x0, y0, x1 - x0, y1 - y0};
+    d.score = score;
+    out.push_back(d);
+  }
+}
+
 // ------------------------------------------------------------------ tracks
 
 float TrackStore::match_score(const Box& t, const Box& d) const {

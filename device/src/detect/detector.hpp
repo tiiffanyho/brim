@@ -73,6 +73,32 @@ std::unique_ptr<Detector> make_stub_detector();
 //   Keep the per-frame path allocation-free: reuse the input tensor and the detection vector.
 std::unique_ptr<Detector> make_mediapipe_detector(const std::string& models_dir);
 
+// --- pure helpers used by the TFLite detector (host-testable, no TFLite needed) ---
+
+// COCO-90 label index (0-based, as the model's labelmap.txt) -> what Brim cares about.
+// nullopt = a class we ignore entirely (never named, never an obstacle).
+std::optional<Thing> thing_of_coco(int coco_index);
+
+// Bilinear resize of a packed RGB888 image into another packed RGB888 buffer (stretch, no
+// letterbox: boxes come back as fractions of the original frame unchanged). Lookup tables are
+// rebuilt only when the sizes change, so steady-state frames do not allocate.
+class RgbResizer {
+ public:
+  void resize(const std::uint8_t* src, int src_w, int src_h, std::uint8_t* dst, int dst_w, int dst_h);
+
+ private:
+  void build(int src_w, int src_h, int dst_w, int dst_h);
+  int sw_ = 0, sh_ = 0, dw_ = 0, dh_ = 0;
+  std::vector<int> x0_, x1_, y0_, y1_;        // source byte offset (x) / row (y)
+  std::vector<std::uint16_t> fx_, fy_;        // 8-bit fixed-point weights of the second sample
+};
+
+// TFLite_Detection_PostProcess outputs -> detections. boxes are [ymin, xmin, ymax, xmax] in
+// [0,1] (clamped here; the model can return slightly outside), classes are COCO-90 indices.
+// Appends to `out` (does not clear). Ignored classes and low scores are dropped.
+void decode_detections(const float* boxes, const float* classes, const float* scores, int count,
+                       float min_confidence, float phone_min_confidence, std::vector<Detection>& out);
+
 // Which third of the frame something is in. side_margin_frac comes from config/nav.json.
 schema::Direction direction_of(const Box& b, double side_margin_frac);
 
