@@ -208,6 +208,19 @@ export function CameraTestScreen() {
         guesses how far away it is, and says what Brim would say.
       </p>
 
+      <div className="card phone-panel">
+        {qr && phones === 0 && <img src={qr} alt="" width={120} height={120} />}
+        <div>
+          <p className="strong">
+            {phones > 0 ? `${phones} phone${phones > 1 ? "s" : ""} connected. The phone speaks; the laptop stays quiet.` : "No phone connected yet."}
+          </p>
+          <p className="muted">
+            On your phone (same Wi-Fi), scan the code or open{" "}
+            {phoneUrls.length ? phoneUrls.map((u) => <code key={u}>{u} </code>) : "this laptop's address on port 5173 /#/phone"}
+          </p>
+        </div>
+      </div>
+
       <div className="cam" data-status={status}>
         <video ref={video} playsInline muted aria-hidden="true" />
         <canvas ref={canvas} aria-hidden="true" />
@@ -241,20 +254,6 @@ export function CameraTestScreen() {
         <div className="check">
           <input id="cam-speak" type="checkbox" checked={speak} onChange={(e) => setSpeak(e.target.checked)} />
           <label htmlFor="cam-speak">Speak on this laptop when no phone is connected</label>
-        </div>
-      </div>
-
-      <h2>Phone</h2>
-      <div className="card phone-panel">
-        {qr && <img src={qr} alt="" width={120} height={120} />}
-        <div>
-          <p className="strong">
-            {phones > 0 ? `${phones} phone${phones > 1 ? "s" : ""} connected. The phone speaks; the laptop stays quiet.` : "No phone connected yet."}
-          </p>
-          <p className="muted">
-            On your phone (same Wi-Fi), scan the code or open{" "}
-            {phoneUrls.length ? phoneUrls.map((u) => <code key={u}>{u} </code>) : "this laptop's address on port 5173 /#/phone"}
-          </p>
         </div>
       </div>
 
