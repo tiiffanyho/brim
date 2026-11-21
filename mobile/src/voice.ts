@@ -8,8 +8,6 @@
 // engine then talks over it using the same app audio session.
 // TODO(hw): confirm on a real iPhone: lock the phone for 10+ minutes on battery and check the
 //   warnings keep coming. The simulator does not suspend apps like a real device does.
-// TODO(android): needs the media foreground service + setActiveForLockScreen (expo-audio docs:
-//   otherwise Android stops background audio after ~3 minutes). Not done yet: iPhone first.
 import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from "expo-audio";
 import * as Speech from "expo-speech";
 import type { Politeness } from "@web/a11y/describe";
