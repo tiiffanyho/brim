@@ -84,7 +84,8 @@ export function LiveScreen() {
   const livePath = path && fresh(path.at) ? path.e : null;
   const liveObstacle = obstacle && fresh(obstacle.at) ? obstacle.e : null;
   const livePeople = [...people.values()].filter((p) => fresh(p.at)).map((p) => p.e);
-  const guiding = liveAlert && said?.type === "clear_path" && said.at >= liveAlert.at;
+  // Only a close warning is paired with the direction after it; a phone warning has no way out.
+  const guiding = liveAlert && liveAlert.e.kind !== "phone_raised" && said?.type === "clear_path" && said.at >= liveAlert.at;
 
   const tone: Tone = activeFault ? "warn" : liveAlert ? "alert" : (said?.tone ?? "calm");
   const quote = activeFault
@@ -100,11 +101,15 @@ export function LiveScreen() {
       ? "Safety warning · guiding"
       : liveAlert
         ? "Safety warning"
-        : liveObstacle
-          ? "Obstacle ahead"
-          : tone === "safe"
-            ? "Back to normal"
-            : "All clear";
+        : livePath && !livePath.clear
+          ? "Path blocked · stop"
+          : liveObstacle
+            ? "Obstacle ahead"
+            : tone === "safe"
+              ? "Back to normal"
+              : livePath?.clear
+                ? "All clear"
+                : "Watching the path"; // never claim clear unless Brim just said so
 
   const blocked = new Set<Direction>(livePath?.clear === false ? ["left", "ahead", "right"] : (livePath?.blocked ?? []));
   const next = activeFault
