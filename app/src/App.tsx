@@ -3,10 +3,12 @@ import { useBrim } from "./state";
 import { ActivityScreen } from "./screens/Activity";
 import { AlertsScreen } from "./screens/Alerts";
 import { DeviceHealthScreen } from "./screens/DeviceHealth";
+import { LiveScreen } from "./screens/Live";
 import { PairScreen } from "./screens/Pair";
 import { SettingsScreen } from "./screens/Settings";
 
 const ROUTES = [
+  { path: "live", label: "Live", Component: LiveScreen },
   { path: "activity", label: "Activity", Component: ActivityScreen },
   { path: "alerts", label: "Alerts", Component: AlertsScreen },
   { path: "settings", label: "Settings", Component: SettingsScreen },
@@ -16,7 +18,7 @@ type RoutePath = (typeof ROUTES)[number]["path"];
 
 function currentRoute(): RoutePath {
   const h = window.location.hash.replace(/^#\/?/, "");
-  return (ROUTES.find((r) => r.path === h)?.path ?? "activity") as RoutePath;
+  return (ROUTES.find((r) => r.path === h)?.path ?? "live") as RoutePath;
 }
 
 export function App() {

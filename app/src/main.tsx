@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { AnnouncerProvider } from "./a11y/Announcer";
 import { App } from "./App";
 import { BrimProvider } from "./state";
+import "@fontsource-variable/figtree";
 import "./styles.css";
 
 createRoot(document.getElementById("root")!).render(
