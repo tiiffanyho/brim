@@ -4,19 +4,29 @@
 // keeps working in the background.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AccessibilityInfo, AppState } from "react-native";
+import { AccessibilityInfo, AppState, Vibration } from "react-native";
 import type { BrimEvent, FaultEvent, HealthEvent, HealthResponse, Settings } from "@schema";
 import { Deduper, describeEvent } from "./core/describe";
 import { HealthWatch, SpeechScheduler, type Tier } from "./core/speech";
 import { EventStream, type StreamStatus } from "./core/ws";
 import { ApiError, makeApi, wsUrlFor, type HatApi } from "./api";
+import { makeCameraApi } from "./camera";
+import { cameraWsUrl, levelAllows, type Level } from "./core/source";
 import { say, setVoice, startOnDuty, stopOnDuty } from "./voice";
 
 /** No health event for this long = connection lost (health_period_ms is 1000 in config/app.json). */
 export const HEALTH_TIMEOUT_MS = 3000;
 const HAT_URL_KEY = "brim.hatUrl";
 const SPEAK_KEY = "brim.speak";
+const SOURCE_KEY = "brim.source";
+const LEVEL_KEY = "brim.level";
+const VIBRATE_KEY = "brim.vibrate";
+
 const MAX_RECENT = 12;
+
+/** Where events come from: a paired hat, or the laptop camera page (app/, `npm run camera`). */
+export type Source = "hat" | "camera";
+export type { Level };
 
 export type Connection = "loading" | "no-hat" | "unpaired" | "online" | "offline";
 
@@ -47,6 +57,13 @@ interface BrimState {
   setSpeaking: (on: boolean) => void;
   /** The hat's settings were loaded or saved: apply the voice parts to the phone. */
   applySettings: (s: Settings) => void;
+  source: Source;
+  /** Use the laptop camera instead of a hat (url from normalizeCameraUrl). */
+  connectCamera: (url: string) => Promise<void>;
+  level: Level;
+  setLevel: (l: Level) => void;
+  vibrate: boolean;
+  setVibrate: (on: boolean) => void;
 }
 
 const Ctx = createContext<BrimState | null>(null);
@@ -78,6 +95,11 @@ export function BrimProvider({ children }: { children: ReactNode }) {
   const [liveHealth, setLiveHealth] = useState<HealthEvent | null>(null);
   const [faults, setFaults] = useState<FaultEvent[]>([]);
   const [unreadAlerts, setUnreadAlerts] = useState(0);
+  const [source, setSource] = useState<Source>("hat");
+  const [level, setLevelState] = useState<Level>(2);
+  const [vibrate, setVibrateState] = useState(true);
+  const levelRef = useRef<Level>(2);
+  const vibrateRef = useRef(true);
 
   const speakingRef = useRef(true);
   const nextId = useRef(1);
@@ -91,10 +113,11 @@ export function BrimProvider({ children }: { children: ReactNode }) {
   const scheduler = useMemo(
     () =>
       new SpeechScheduler((text, politeness) => {
-        if (speakingRef.current) say(text, politeness);
-        // Speech switched off: still let VoiceOver read it while the app is on screen.
-        else if (AppState.currentState === "active") AccessibilityInfo.announceForAccessibility(text);
         const tier = tierOf.current.get(text) ?? "info";
+        const allowed = levelAllows(levelRef.current, tier);
+        if (speakingRef.current && allowed) say(text, politeness);
+        // Speech switched off: still let VoiceOver read it while the app is on screen.
+        else if (allowed && AppState.currentState === "active") AccessibilityInfo.announceForAccessibility(text);
         setRecent((r) => [{ id: nextId.current++, text, tier, at: Date.now() }, ...r].slice(0, MAX_RECENT));
       }),
     [],
@@ -107,30 +130,44 @@ export function BrimProvider({ children }: { children: ReactNode }) {
     [scheduler],
   );
 
-  const api: HatApi | null = useMemo(() => (hatUrl ? makeApi(hatUrl) : null), [hatUrl]);
+  const api: HatApi | null = useMemo(
+    () => (hatUrl ? (source === "camera" ? makeCameraApi(hatUrl) : makeApi(hatUrl)) : null),
+    [hatUrl, source],
+  );
 
   // Load the saved hat address and the speech switch once.
   useEffect(() => {
     void (async () => {
-      const [url, sp] = await Promise.all([AsyncStorage.getItem(HAT_URL_KEY), AsyncStorage.getItem(SPEAK_KEY)]);
+      const [url, sp, src, lv, vib] = await Promise.all(
+        [HAT_URL_KEY, SPEAK_KEY, SOURCE_KEY, LEVEL_KEY, VIBRATE_KEY].map((k) => AsyncStorage.getItem(k)),
+      );
       if (sp === "off") {
         speakingRef.current = false;
         setSpeakingState(false);
       }
-      setHatUrl(url);
+      if (src === "camera") setSource("camera");
+      if (lv === "0" || lv === "1" || lv === "2") {
+        levelRef.current = Number(lv) as Level;
+        setLevelState(Number(lv) as Level);
+      }
+      if (vib === "off") {
+        vibrateRef.current = false;
+        setVibrateState(false);
+      }
+      setHatUrl(url ?? null);
       setConnection(url ? "offline" : "no-hat");
     })();
   }, []);
 
   const refreshHealth = useCallback(async () => {
-    if (!api) return;
+    if (!api || source === "camera") return; // the laptop camera has no health endpoint
     try {
       setHealth(await api.health());
       setConnection("online");
     } catch (e) {
       setConnection(e instanceof ApiError && e.unauthorized ? "unpaired" : "offline");
     }
-  }, [api]);
+  }, [api, source]);
 
   const applySettings = useCallback((s: Settings) => setVoice(s.speech_rate, s.volume), []);
 
@@ -153,7 +190,10 @@ export function BrimProvider({ children }: { children: ReactNode }) {
         }
       }
       if (e.type === "fault") setFaults((f) => [e, ...f].slice(0, 20));
-      if (e.type === "safety_alert") setUnreadAlerts((n) => n + 1);
+      if (e.type === "safety_alert") {
+        setUnreadAlerts((n) => n + 1);
+        if (vibrateRef.current && levelRef.current > 0) Vibration.vibrate(e.severity === "critical" ? [0, 220, 90, 220] : 160);
+      }
       const a = describeEvent(e);
       const always = a?.tier === "alert" || a?.tier === "nav";
       if (a && deduper.current.shouldAnnounce(a, Date.now(), always)) speak(a.text, a.tier);
@@ -165,12 +205,16 @@ export function BrimProvider({ children }: { children: ReactNode }) {
   // One live stream per hat address; it reconnects by itself.
   useEffect(() => {
     if (!hatUrl) return;
+    const camera = source === "camera";
     const s = new EventStream({
-      url: wsUrlFor(hatUrl),
+      url: camera ? cameraWsUrl(hatUrl) : wsUrlFor(hatUrl),
       onEvent: handleEvent,
       onStatus: (st) => {
         setStream(st);
-        if (st === "closed") void refreshHealth();
+        if (st === "closed") {
+          if (camera) setConnection("offline");
+          else void refreshHealth();
+        }
         if (st === "open") setConnection("online");
       },
     });
@@ -186,7 +230,7 @@ export function BrimProvider({ children }: { children: ReactNode }) {
       s.stop();
       streamRef.current = null;
     };
-  }, [hatUrl, handleEvent, refreshHealth, loadSettings]);
+  }, [hatUrl, source, handleEvent, refreshHealth, loadSettings]);
 
   // Waiting phrases go out once the phone is quiet; runs in the background too (app kept alive).
   useEffect(() => {
@@ -212,10 +256,10 @@ export function BrimProvider({ children }: { children: ReactNode }) {
 
   // Server-side health (restarts, relay latency) every 5 s while paired.
   useEffect(() => {
-    if (connection === "unpaired" || connection === "no-hat" || connection === "loading") return;
+    if (connection === "unpaired" || connection === "no-hat" || connection === "loading" || source === "camera") return;
     const t = setInterval(() => void refreshHealth(), 5000);
     return () => clearInterval(t);
-  }, [connection, refreshHealth]);
+  }, [connection, source, refreshHealth]);
 
   // Stay alive in the background while paired and speaking; otherwise let iOS suspend us.
   useEffect(() => {
@@ -226,15 +270,43 @@ export function BrimProvider({ children }: { children: ReactNode }) {
 
   const pair = useCallback(async (url: string, pin: string) => {
     await makeApi(url).pair(pin); // throws ApiError with a readable message
-    await AsyncStorage.setItem(HAT_URL_KEY, url);
+    await AsyncStorage.multiSet([
+      [HAT_URL_KEY, url],
+      [SOURCE_KEY, "hat"],
+    ]);
+    setSource("hat");
     healthWatch.current.reset();
     setHatUrl(url);
     setConnection("online");
     streamRef.current?.reconnectNow();
   }, []);
 
+  const connectCamera = useCallback(async (url: string) => {
+    await AsyncStorage.multiSet([
+      [HAT_URL_KEY, url],
+      [SOURCE_KEY, "camera"],
+    ]);
+    healthWatch.current.reset();
+    setSource("camera");
+    setHatUrl(url);
+    setConnection("offline"); // "online" as soon as the camera link opens
+  }, []);
+
+  const setLevel = useCallback((l: Level) => {
+    levelRef.current = l;
+    setLevelState(l);
+    void AsyncStorage.setItem(LEVEL_KEY, String(l));
+  }, []);
+
+  const setVibrate = useCallback((on: boolean) => {
+    vibrateRef.current = on;
+    setVibrateState(on);
+    void AsyncStorage.setItem(VIBRATE_KEY, on ? "on" : "off");
+  }, []);
+
   const forgetHat = useCallback(async () => {
-    await AsyncStorage.removeItem(HAT_URL_KEY);
+    await AsyncStorage.multiRemove([HAT_URL_KEY, SOURCE_KEY]);
+    setSource("hat");
     stopOnDuty();
     setHatUrl(null);
     setHealth(null);
@@ -279,8 +351,14 @@ export function BrimProvider({ children }: { children: ReactNode }) {
       forgetHat,
       setSpeaking,
       applySettings,
+      source,
+      connectCamera,
+      level,
+      setLevel,
+      vibrate,
+      setVibrate,
     }),
-    [hatUrl, api, connection, stream, linkLost, speaking, recent, health, liveHealth, faults, unreadAlerts, clearUnreadAlerts, subscribe, pair, forgetHat, setSpeaking, applySettings],
+    [hatUrl, api, connection, stream, linkLost, speaking, recent, health, liveHealth, faults, unreadAlerts, clearUnreadAlerts, subscribe, pair, forgetHat, setSpeaking, applySettings, source, connectCamera, level, setLevel, vibrate, setVibrate],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

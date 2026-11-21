@@ -14,11 +14,11 @@ describe("walking words", () => {
     const go = (direction: "left" | "right" | "ahead", blocked: ("left" | "ahead" | "right")[]) => ({
       clear: true, direction, blocked, text: "",
     });
-    expect(walkingWords(go("right", ["ahead", "left"]), "chair", 1.4)).toBe("Chair ahead, 1.5 metres. Step right.");
-    expect(walkingWords(go("left", ["right"]), "table", null)).toBe("Table on your right. Step left.");
-    expect(walkingWords(go("ahead", ["left", "right"]), "chair", null)).toBe("Gap ahead. Keep going straight.");
+    expect(walkingWords(go("right", ["ahead", "left"]), "chair", 1.4)).toBe("Chair ahead, 1.5 metres. Step right");
+    expect(walkingWords(go("left", ["right"]), "table", null)).toBe("Table on your right. Step left");
+    expect(walkingWords(go("ahead", ["left", "right"]), "chair", null)).toBe("Gap ahead. Keep going straight");
     expect(walkingWords({ clear: false, direction: "unknown", blocked: [], text: "" }, "unknown" as Thing, null)).toBe(
-      "Stop. Path blocked.",
+      "Stop. Path blocked",
     );
   });
 });
@@ -44,13 +44,13 @@ describe("guide", () => {
 
   it("says a step, then 'Path clear' once the way opens", () => {
     const said = run([...Array(6).fill([chair(0.05)]), ...Array(30).fill([])]);
-    expect(said[0]).toBe("Chair on your left. Step right.");
-    expect(said.at(-1)).toBe("Path clear. Walk forward.");
+    expect(said[0]).toBe("Chair on your left. Step right");
+    expect(said.at(-1)).toBe("Path clear. Walk forward");
   });
 
   it("warns first when something is close right in front", () => {
     const said = run(Array(6).fill([chair(0.25, 0.55, 0.5)])); // fills 27% of the frame: close
-    expect(said[0]).toBe("Stop. Chair right in front of you.");
-    expect(said[1]).toMatch(/^Chair ahead, .+\. Step (left|right)\.$/);
+    expect(said[0]).toBe("Stop. Chair right in front of you");
+    expect(said[1]).toMatch(/^Chair ahead, .+\. Step (left|right)$/);
   });
 });

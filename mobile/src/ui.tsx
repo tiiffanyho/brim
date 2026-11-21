@@ -3,7 +3,7 @@
 //   * values that go up and down are "adjustable" (swipe up / down with VoiceOver), not sliders;
 //   * choices are radio buttons with their selected state; status is in words, never colour only;
 //   * touch targets are at least 44 pt.
-import { useEffect, useRef, type ComponentRef, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, type ComponentRef, type ReactNode } from "react";
 import {
   AccessibilityInfo,
   ActivityIndicator,
@@ -13,15 +13,17 @@ import {
   Switch,
   Text,
   View,
-  useColorScheme,
 } from "react-native";
 
+// The Brim palette (theme.ts), light only to match the redesigned screens. Contrast stays high:
+// ink on the page is about 16:1, muted text about 6:1.
+const COLORS = { bg: "#FAF8FF", fg: "#1B1530", muted: "#5E5873", card: "#F3EEFF", accent: "#6D28D9", danger: "#B91C1C", ok: "#15803D", border: "#DDD3F7" };
 export function useColors() {
-  const dark = useColorScheme() === "dark";
-  return dark
-    ? { bg: "#0f1115", fg: "#f3f4f6", muted: "#b6bcc6", card: "#1b1f27", accent: "#7cc4ff", danger: "#ff8a80", ok: "#7ee2a8", border: "#3a4150" }
-    : { bg: "#ffffff", fg: "#111418", muted: "#4a515c", card: "#f2f4f7", accent: "#0b5cad", danger: "#b3261e", ok: "#1b6e3c", border: "#c5cbd3" };
+  return COLORS;
 }
+
+/** Set by the app shell for pages opened from Settings: shows "‹ Back" above the title. */
+export const BackContext = createContext<{ label: string; onBack: () => void } | null>(null);
 export type Colors = ReturnType<typeof useColors>;
 
 /** Moves VoiceOver focus to the screen title when a screen appears. */
@@ -37,8 +39,14 @@ export function useFocusTitle() {
 export function Screen({ title, intro, children }: { title: string; intro?: string; children: ReactNode }) {
   const c = useColors();
   const ref = useFocusTitle();
+  const back = useContext(BackContext);
   return (
     <ScrollView style={{ backgroundColor: c.bg }} contentContainerStyle={styles.screen} keyboardShouldPersistTaps="handled">
+      {back ? (
+        <Pressable accessibilityRole="button" accessibilityLabel={`Back to ${back.label}`} onPress={back.onBack} style={styles.back} hitSlop={8}>
+          <Text style={[styles.backText, { color: c.accent }]}>‹ {back.label}</Text>
+        </Pressable>
+      ) : null}
       <Text ref={ref} accessibilityRole="header" style={[styles.h1, { color: c.fg }]}>
         {title}
       </Text>
@@ -217,6 +225,8 @@ export function Facts({ rows }: { rows: readonly [string, string][] }) {
 
 export const styles = StyleSheet.create({
   screen: { padding: 20, paddingTop: 64, paddingBottom: 40, gap: 12 },
+  back: { alignSelf: "flex-start", minHeight: 44, justifyContent: "center", marginTop: -16 },
+  backText: { fontSize: 17, fontWeight: "600" },
   h1: { fontSize: 32, fontWeight: "700" },
   h2: { fontSize: 22, fontWeight: "700", marginTop: 12 },
   body: { fontSize: 18, lineHeight: 26 },
@@ -224,9 +234,9 @@ export const styles = StyleSheet.create({
   bold: { fontWeight: "700" },
   label: { fontSize: 18, fontWeight: "600" },
   input: { minHeight: 52, borderWidth: 2, borderRadius: 10, paddingHorizontal: 14, fontSize: 20 },
-  button: { minHeight: 52, borderRadius: 12, borderWidth: 2, alignItems: "center", justifyContent: "center", marginTop: 8 },
+  button: { minHeight: 52, borderRadius: 999, borderWidth: 2, alignItems: "center", justifyContent: "center", marginTop: 8 },
   buttonText: { fontSize: 19, fontWeight: "700" },
-  card: { borderWidth: 2, borderRadius: 12, padding: 14 },
+  card: { borderWidth: 1, borderRadius: 18, padding: 14 },
   row: { flexDirection: "row", alignItems: "center", minHeight: 48 },
   flex: { flex: 1 },
   group: { gap: 8 },

@@ -55,10 +55,14 @@ export function distanceWords(d: number | null): string {
 }
 
 /** Clear walking words for one of nav.cpp's calls. */
+/**
+ * Phrases end without a full stop, like the hat's own ("Chair ahead, step right"): the phone apps
+ * add the final full stop when they speak or show them.
+ */
 export function walkingWords(call: ClearPathCall, because: Thing, distance: number | null): string {
-  if (!call.clear) return "Stop. Path blocked.";
-  if (call.direction === "ahead") return "Gap ahead. Keep going straight.";
-  const step = `Step ${call.direction}.`;
+  if (!call.clear) return "Stop. Path blocked";
+  if (call.direction === "ahead") return "Gap ahead. Keep going straight";
+  const step = `Step ${call.direction}`;
   const name = nameOf(because);
   if (call.blocked.includes("ahead")) {
     const d = distanceWords(distance);
@@ -117,13 +121,13 @@ export class Guide {
       .filter((t) => inCorridor(t) && proximityOf(t, scale) === "close")
       .sort((a, b) => b.box.h - a.box.h)[0];
     if (close) {
-      const text = `Stop. ${nameOf(close.thing)} right in front of you.`;
+      const text = `Stop. ${nameOf(close.thing)} right in front of you`;
       if (this.ok(text, now, ALERT_REPEAT_MS)) out.push(this.alert(now, close, text, "critical"));
     }
     // 2. Safety: something coming toward you fast.
     const coming = sure.filter((t) => t.approaching && t !== close).sort((a, b) => b.box.h - a.box.h)[0];
     if (coming) {
-      const text = `${nameOf(coming.thing)} coming toward you.`;
+      const text = `${nameOf(coming.thing)} coming toward you`;
       if (this.ok(`approach-${coming.id}`, now, APPROACH_REPEAT_MS)) out.push(this.alert(now, coming, text, "warning"));
     }
 
@@ -154,7 +158,7 @@ export class Guide {
           ...this.base(now),
           clear: true,
           direction: "ahead",
-          text: "Path clear. Walk forward.",
+          text: "Path clear. Walk forward",
           blocked: [],
         });
         this.needsAllClear = false;
