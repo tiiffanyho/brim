@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# No QNX build in CI (the SDP needs a licence); the Pi build is checked by scripts/deploy.sh.
+jobs:
+  schema:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Generated types are up to date with shared/events.schema.json
+        run: node shared/gen/generate.mjs --check
+
+  app:
+    runs-on: ubuntu-24.04
+    defaults:
+      run: { working-directory: app }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  device:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libwebsockets-dev libsqlite3-dev libssl-dev
+      - name: Configure + build (host preset, UDS IPC)
+        working-directory: device
+        run: cmake --preset host && cmake --build --preset host -j
+      - name: Unit tests (schema, SQLite layer, speak queue, privacy, API)
+        working-directory: device
+        run: ctest --preset host
+      - name: End-to-end smoke test (pairing, REST, WebSocket, supervisor restart, forget)
+        run: scripts/smoke_test.sh

@@ -1,0 +1,16 @@
+# build outputs
+device/build/
+app/node_modules/
+app/dist/
+.dev/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.DS_Store
+# generated audio and models are large / device-specific
+audio/*.wav
+models/*.tflite
+models/*.task
+models/*.bin
+.dev-run.log

@@ -1,0 +1,6 @@
+{"type":"person_recognized","seq":1,"source":"brim","t_mono_ms":1000,"t_capture_mono_ms":960,"person_id":1,"display_name":"Sam","confidence":0.93,"direction":"left"}
+{"type":"unknown_person","seq":2,"source":"brim","t_mono_ms":1100,"anon_id":"stranger-3","direction":"ahead"}
+{"type":"cue","seq":3,"source":"brim","t_mono_ms":1200,"cue":"waving","text":"Sam is waving","person_id":1}
+{"type":"safety_alert","seq":4,"source":"brim","t_mono_ms":1300,"kind":"obstacle_head_height","severity":"critical","text":"Low branch ahead","distance_m":1.5,"direction":"ahead"}
+{"type":"fault","seq":5,"source":"supervisor","t_mono_ms":1400,"component":"brim","action":"restarting","message":"heartbeat missed for 1000 ms","restart_count":1}
+{"type":"health","seq":6,"source":"brim","t_mono_ms":1500,"uptime_s":12.5,"fps":15,"cpu_pct":41.5,"temp_c":52,"pipeline_latency_ms":48,"speak_queue_len":0,"components":[{"name":"capture","state":"stub"},{"name":"faces","state":"ok","detail":"fake"}]}

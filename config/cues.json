@@ -1,0 +1,11 @@
+{
+  "_comment": "Thresholds for recognition, cues and safety. Loaded by brim at startup (device/src/common/config.cpp). Missing keys fall back to safe defaults. cue_min_interval_s is floored at 10 and stranger_forget_s capped at 1800 in code (spec rules).",
+  "recognize_min_confidence": 0.80,
+  "unknown_max_confidence": 0.55,
+  "name_repeat_s": 120,
+  "cue_min_interval_s": 10,
+  "cue_max_age_ms": 3000,
+  "stranger_forget_s": 1800,
+  "safety_head_height_m": 2.0,
+  "safety_fast_approach_mps": 2.5
+}

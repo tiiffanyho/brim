@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brim.local/events.schema.json",
+  "title": "Brim events and API payloads",
+  "description": "Single source of truth for every event (device -> app_server -> PWA) and every REST payload. Run `node shared/gen/generate.mjs` after editing. Timestamps named t_*_mono_ms are CLOCK_MONOTONIC milliseconds on the device; *_at fields are ISO-8601 UTC wall-clock strings.",
+  "x-schema-version": 1,
+  "$defs": {
+    "Direction": {
+      "description": "Where the person/object is relative to the wearer's head.",
+      "type": "string",
+      "enum": ["left", "ahead", "right", "unknown"]
+    },
+    "CueKind": {
+      "description": "Social cue detected on a nearby person.",
+      "type": "string",
+      "enum": ["waving", "smiling", "approaching", "leaving", "looking_at_you", "speaking_to_you"]
+    },
+    "SafetyKind": {
+      "type": "string",
+      "enum": ["obstacle_head_height", "obstacle_ahead", "step_or_curb", "fast_approach", "vehicle"]
+    },
+    "Severity": {
+      "type": "string",
+      "enum": ["info", "warning", "critical"]
+    },
+    "FaultAction": {
+      "description": "What the system did about a fault.",
+      "type": "string",
+      "enum": ["restarting", "degraded", "recovered", "info"]
+    },
+    "ComponentState": {
+      "type": "string",
+      "enum": ["ok", "degraded", "down", "stub"]
+    },
+    "CommandKind": {
+      "description": "Commands app_server sends to brim.",
+      "type": "string",
+      "enum": ["forget_person", "reload_people", "reload_settings"]
+    },
+    "ActivityKind": {
+      "type": "string",
+      "enum": ["recognized", "stranger"]
+    },
+    "Sensitivity": {
+      "type": "string",
+      "enum": ["low", "normal", "high"]
+    },
+
+    "ComponentStatus": {
+      "type": "object",
+      "required": ["name", "state"],
+      "properties": {
+        "name": { "type": "string" },
+        "state": { "$ref": "#/$defs/ComponentState" },
+        "detail": { "type": "string" }
+      }
+    },
+
+    "PersonRecognizedEvent": {
+      "description": "An enrolled person was recognized. Spoken as '<name> is here'.",
+      "type": "object",
+      "required": ["type", "seq", "source", "t_mono_ms", "person_id", "display_name", "confidence", "direction"],
+      "properties": {
+        "type": { "const": "person_recognized" },
+        "seq": { "type": "integer", "description": "Per-source counter; gaps mean dropped events." },
+        "source": { "type": "string" },
+        "t_mono_ms": { "type": "integer", "description": "Device CLOCK_MONOTONIC ms when emitted." },
+        "t_capture_mono_ms": { "type": "integer", "description": "Monotonic ms of the camera frame this came from." },
+        "t_relay_mono_ms": { "type": "integer", "description": "Stamped by app_server when relayed to the phone." },
+        "person_id": { "type": "integer" },
+        "display_name": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "direction": { "$ref": "#/$defs/Direction" }
+      }
+    },
+    "UnknownPersonEvent": {
+      "description": "A face that matches nobody enrolled. anon_id is stable for at most 30 minutes, then forgotten.",
+      "type": "object",
+      "required": ["type", "seq", "source", "t_mono_ms", "anon_id", "direction"],
+      "properties": {
+        "type": { "const": "unknown_person" },
+        "seq": { "type": "integer" },
+        "source": { "type": "string" },
+        "t_mono_ms": { "type": "integer" },
+        "t_capture_mono_ms": { "type": "integer" },
+        "t_relay_mono_ms": { "type": "integer" },
+        "anon_id": { "type": "string" },
+        "direction": { "$ref": "#/$defs/Direction" }
+      }
+    },
+    "CueEvent": {
+      "type": "object",
+      "required": ["type", "seq", "source", "t_mono_ms", "cue", "text"],
+      "properties": {
+        "type": { "const": "cue" },
+        "seq": { "type": "integer" },
+        "source": { "type": "string" },
+        "t_mono_ms": { "type": "integer" },
+        "t_capture_mono_ms": { "type": "integer" },
+        "t_relay_mono_ms": { "type": "integer" },
+        "cue": { "$ref": "#/$defs/CueKind" },
+        "text": { "type": "string", "description": "Short phrase to speak/show, e.g. 'Sam is waving'." },
+        "person_id": { "type": "integer" },
+        "anon_id": { "type": "string" }
+      }
+    },
+    "SafetyAlertEvent": {
+      "type": "object",
+      "required": ["type", "seq", "source", "t_mono_ms", "kind", "severity", "text", "direction"],
+      "properties": {
+        "type": { "const": "safety_alert" },
+        "seq": { "type": "integer" },
+        "source": { "type": "string" },
+        "t_mono_ms": { "type": "integer" },
+        "t_capture_mono_ms": { "type": "integer" },
+        "t_relay_mono_ms": { "type": "integer" },
+        "kind": { "$ref": "#/$defs/SafetyKind" },
+        "severity": { "$ref": "#/$defs/Severity" },
+        "text": { "type": "string" },
+        "distance_m": { "type": "number" },
+        "direction": { "$ref": "#/$defs/Direction" }
+      }
+    },
+    "FaultEvent": {
+      "type": "object",
+      "required": ["type", "seq", "source", "t_mono_ms", "component", "action", "message"],
+      "properties": {
+        "type": { "const": "fault" },
+        "seq": { "type": "integer" },
+        "source": { "type": "string" },
+        "t_mono_ms": { "type": "integer" },
+        "t_relay_mono_ms": { "type": "integer" },
+        "component": { "type": "string" },
+        "action": { "$ref": "#/$defs/FaultAction" },
+        "message": { "type": "string" },
+        "restart_count": { "type": "integer" }
+      }
+    },
+    "HealthEvent": {
+      "description": "Periodic (1 Hz) device health snapshot.",
+      "type": "object",
+      "required": ["type", "seq", "source", "t_mono_ms", "uptime_s", "fps", "cpu_pct", "pipeline_latency_ms", "speak_queue_len", "components"],
+      "properties": {
+        "type": { "const": "health" },
+        "seq": { "type": "integer" },
+        "source": { "type": "string" },
+        "t_mono_ms": { "type": "integer" },
+        "t_relay_mono_ms": { "type": "integer" },
+        "uptime_s": { "type": "number" },
+        "fps": { "type": "number" },
+        "cpu_pct": { "type": "number" },
+        "temp_c": { "type": "number" },
+        "mem_used_mb": { "type": "number" },
+        "pipeline_latency_ms": { "type": "number", "description": "Capture -> event latency, rolling average." },
+        "speak_queue_len": { "type": "integer" },
+        "components": { "type": "array", "items": { "$ref": "#/$defs/ComponentStatus" } }
+      }
+    },
+    "BrimEvent": {
+      "description": "Any event on the bus / WebSocket. Discriminated by `type`.",
+      "x-discriminator": "type",
+      "oneOf": [
+        { "$ref": "#/$defs/PersonRecognizedEvent" },
+        { "$ref": "#/$defs/UnknownPersonEvent" },
+        { "$ref": "#/$defs/CueEvent" },
+        { "$ref": "#/$defs/SafetyAlertEvent" },
+        { "$ref": "#/$defs/FaultEvent" },
+        { "$ref": "#/$defs/HealthEvent" }
+      ]
+    },
+
+    "Command": {
+      "description": "app_server -> brim control message (never leaves the device).",
+      "type": "object",
+      "required": ["type", "t_mono_ms", "command"],
+      "properties": {
+        "type": { "const": "command" },
+        "t_mono_ms": { "type": "integer" },
+        "command": { "$ref": "#/$defs/CommandKind" },
+        "person_id": { "type": "integer" }
+      }
+    },
+
+    "Person": {
+      "type": "object",
+      "required": ["id", "display_name", "enrolled_at", "has_name_clip", "has_embedding"],
+      "properties": {
+        "id": { "type": "integer" },
+        "display_name": { "type": "string" },
+        "enrolled_at": { "type": "string" },
+        "last_seen_at": { "type": "string" },
+        "has_name_clip": { "type": "boolean" },
+        "has_embedding": { "type": "boolean" }
+      }
+    },
+    "PersonPatch": {
+      "type": "object",
+      "required": ["display_name"],
+      "properties": {
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 60 }
+      }
+    },
+    "ActivityItem": {
+      "type": "object",
+      "required": ["id", "kind", "direction", "seen_at"],
+      "properties": {
+        "id": { "type": "integer" },
+        "kind": { "$ref": "#/$defs/ActivityKind" },
+        "person_id": { "type": "integer" },
+        "display_name": { "type": "string" },
+        "anon_id": { "type": "string" },
+        "direction": { "$ref": "#/$defs/Direction" },
+        "seen_at": { "type": "string" }
+      }
+    },
+    "Alert": {
+      "type": "object",
+      "required": ["id", "kind", "severity", "text", "created_at"],
+      "properties": {
+        "id": { "type": "integer" },
+        "kind": { "$ref": "#/$defs/SafetyKind" },
+        "severity": { "$ref": "#/$defs/Severity" },
+        "text": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "Settings": {
+      "type": "object",
+      "required": ["volume", "speech_rate", "cues_enabled", "announce_strangers", "safety_sensitivity", "cue_min_interval_s"],
+      "properties": {
+        "volume": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "speech_rate": { "type": "number", "minimum": 0.5, "maximum": 2.0 },
+        "cues_enabled": { "type": "boolean" },
+        "announce_strangers": { "type": "boolean" },
+        "safety_sensitivity": { "$ref": "#/$defs/Sensitivity" },
+        "cue_min_interval_s": { "type": "integer", "minimum": 10, "maximum": 600 }
+      }
+    },
+    "HealthResponse": {
+      "type": "object",
+      "required": ["server_uptime_s", "brim_connected", "ws_clients", "db_ok", "restart_count"],
+      "properties": {
+        "server_uptime_s": { "type": "number" },
+        "brim_connected": { "type": "boolean", "description": "A brim event arrived in the last 3 s." },
+        "last_event_age_ms": { "type": "integer" },
+        "ws_clients": { "type": "integer" },
+        "db_ok": { "type": "boolean" },
+        "restart_count": { "type": "integer" },
+        "relay_latency_ms": { "type": "number", "description": "Average brim emit -> app_server relay delay." },
+        "last_health": { "$ref": "#/$defs/HealthEvent" }
+      }
+    },
+    "PairRequest": {
+      "type": "object",
+      "required": ["pin"],
+      "properties": { "pin": { "type": "string", "pattern": "^[0-9]{6}$" } }
+    },
+    "PairResponse": {
+      "type": "object",
+      "required": ["ok"],
+      "properties": { "ok": { "type": "boolean" } }
+    },
+    "ApiError": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": { "type": "string" },
+        "retry_after_s": { "type": "integer" }
+      }
+    }
+  }
+}

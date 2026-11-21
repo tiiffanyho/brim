@@ -1,0 +1,137 @@
+cmake_minimum_required(VERSION 3.21)
+project(brim_device VERSION 0.1.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(BRIM_IS_QNX OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "QNX")
+  set(BRIM_IS_QNX ON)
+endif()
+
+# IPC backend: QNX message passing on the Pi, Unix datagram sockets on the laptop.
+if(BRIM_IS_QNX)
+  set(BRIM_IPC_BACKEND "qnx" CACHE STRING "IPC backend: qnx or uds")
+else()
+  set(BRIM_IPC_BACKEND "uds" CACHE STRING "IPC backend: qnx or uds")
+endif()
+set_property(CACHE BRIM_IPC_BACKEND PROPERTY STRINGS qnx uds)
+option(BRIM_BUILD_TESTS "Build unit tests" ON)
+option(BRIM_BUILD_APP_SERVER "Build app_server (needs libwebsockets + sqlite3)" ON)
+
+set(BRIM_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+set(BRIM_SHARED_GEN ${BRIM_REPO_ROOT}/shared/gen)
+
+if(NOT MSVC)
+  add_compile_options(-Wall -Wextra -Wno-unused-parameter)
+endif()
+
+find_package(Threads REQUIRED)
+
+# ---------------------------------------------------------------- common + ipc
+add_library(brim_common STATIC
+  src/common/json.cpp
+  src/common/log.cpp
+  src/common/timing.cpp
+  src/common/config.cpp
+  src/common/sysinfo.cpp
+)
+target_include_directories(brim_common PUBLIC src ${BRIM_SHARED_GEN})
+target_link_libraries(brim_common PUBLIC Threads::Threads)
+
+if(BRIM_IPC_BACKEND STREQUAL "qnx")
+  set(BRIM_IPC_SRC src/ipc/bus_qnx.cpp)
+else()
+  set(BRIM_IPC_SRC src/ipc/bus_uds.cpp)
+endif()
+add_library(brim_ipc STATIC src/ipc/event_bus.cpp ${BRIM_IPC_SRC})
+target_link_libraries(brim_ipc PUBLIC brim_common)
+if(BRIM_IS_QNX)
+  target_link_libraries(brim_ipc PUBLIC socket)  # libsocket on QNX
+endif()
+message(STATUS "Brim IPC backend: ${BRIM_IPC_BACKEND}")
+
+# ---------------------------------------------------------------- pipeline modules
+add_library(brim_pipeline STATIC
+  src/capture/camera.cpp
+  src/faces/face_detector.cpp
+  src/recognize/recognizer.cpp
+  src/cues/cue_engine.cpp
+  src/safety/safety_monitor.cpp
+  src/audio/speak_queue.cpp
+  src/audio/audio_out.cpp
+)
+target_link_libraries(brim_pipeline PUBLIC brim_common)
+# TODO(ai): when real models land, link mediapipe / tflite-runtime / OpenCV from oss.qnx.com here,
+#   e.g. find_library(TFLITE_LIB tensorflowlite) under BRIM_QNX_DEPS_PREFIX, guarded by an option
+#   BRIM_WITH_AI so the laptop build keeps working without them.
+
+add_library(brim_dashboard STATIC src/dashboard/dashboard.cpp)
+target_link_libraries(brim_dashboard PUBLIC brim_common)
+
+# ---------------------------------------------------------------- executables
+add_executable(brim src/brim_main.cpp)
+target_link_libraries(brim PRIVATE brim_pipeline brim_ipc)
+
+add_executable(supervisor
+  src/supervisor/supervisor_main.cpp
+  src/supervisor/child.cpp
+  src/supervisor/watchdog.cpp
+)
+target_link_libraries(supervisor PRIVATE brim_ipc)
+
+# ---------------------------------------------------------------- app_server
+if(BRIM_BUILD_APP_SERVER)
+  # SQLite 3.51.0 from oss.qnx.com on the Pi; system/Homebrew sqlite on the laptop.
+  find_package(SQLite3 REQUIRED)
+  if(TARGET SQLite3::SQLite3)
+    set(BRIM_SQLITE_TARGET SQLite3::SQLite3)   # CMake >= 4.x
+  else()
+    set(BRIM_SQLITE_TARGET SQLite::SQLite3)    # older CMake
+  endif()
+  add_library(brim_db STATIC src/app_server/db.cpp)
+  target_link_libraries(brim_db PUBLIC brim_common ${BRIM_SQLITE_TARGET})
+
+  # REST router + relay: no libwebsockets dependency, so they are unit-testable.
+  add_library(brim_api STATIC src/app_server/api.cpp src/app_server/pairing.cpp src/app_server/relay.cpp)
+  target_link_libraries(brim_api PUBLIC brim_db brim_ipc)
+
+  # libwebsockets 4.5.8 from oss.qnx.com on the Pi; Homebrew/apt on the laptop.
+  find_package(libwebsockets CONFIG QUIET)
+  if(TARGET websockets_shared)
+    set(BRIM_LWS_TARGET websockets_shared)
+  elseif(TARGET websockets)
+    set(BRIM_LWS_TARGET websockets)
+  else()
+    find_path(LWS_INCLUDE_DIR libwebsockets.h REQUIRED)
+    find_library(LWS_LIBRARY websockets REQUIRED)
+    add_library(brim_lws INTERFACE)
+    target_include_directories(brim_lws INTERFACE ${LWS_INCLUDE_DIR})
+    target_link_libraries(brim_lws INTERFACE ${LWS_LIBRARY})
+    set(BRIM_LWS_TARGET brim_lws)
+  endif()
+  message(STATUS "libwebsockets target: ${BRIM_LWS_TARGET}")
+
+  add_executable(app_server src/app_server/app_server_main.cpp)
+  target_link_libraries(app_server PRIVATE brim_api brim_dashboard ${BRIM_LWS_TARGET})
+endif()
+
+# ---------------------------------------------------------------- tests
+if(BRIM_BUILD_TESTS)
+  enable_testing()
+  function(brim_test name)
+    add_executable(${name} tests/${name}.cpp)
+    target_link_libraries(${name} PRIVATE ${ARGN})
+    target_compile_definitions(${name} PRIVATE BRIM_REPO_ROOT="${BRIM_REPO_ROOT}")
+    add_test(NAME ${name} COMMAND ${name})
+  endfunction()
+  brim_test(test_schema brim_common)
+  brim_test(test_speak_queue brim_pipeline)
+  brim_test(test_privacy brim_pipeline)
+  if(BRIM_BUILD_APP_SERVER)
+    brim_test(test_db brim_db)
+    brim_test(test_api brim_api)
+  endif()
+endif()

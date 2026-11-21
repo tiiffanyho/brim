@@ -1,0 +1,33 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "host",
+      "displayName": "Laptop (macOS/Linux), UDS IPC, fake mode",
+      "binaryDir": "${sourceDir}/build/host",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BRIM_IPC_BACKEND": "uds"
+      }
+    },
+    {
+      "name": "qnx-aarch64le",
+      "displayName": "Raspberry Pi 5, QNX SDP 8.0 (source qnxsdp-env.sh first)",
+      "binaryDir": "${sourceDir}/build/qnx-aarch64le",
+      "toolchainFile": "${sourceDir}/cmake/qnx-aarch64le.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BRIM_IPC_BACKEND": "qnx",
+        "BRIM_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "host", "configurePreset": "host" },
+    { "name": "qnx-aarch64le", "configurePreset": "qnx-aarch64le" }
+  ],
+  "testPresets": [
+    { "name": "host", "configurePreset": "host", "output": { "outputOnFailure": true } }
+  ]
+}
