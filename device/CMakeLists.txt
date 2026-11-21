@@ -89,7 +89,8 @@ if(BRIM_WITH_TFLITE)
   find_path(TFLITE_INCLUDE_DIR tensorflow/lite/c/c_api.h PATH_SUFFIXES include usr/include)
   find_library(TFLITE_C_LIB NAMES tensorflowlite_c tensorflow-lite tensorflowlite PATH_SUFFIXES lib usr/lib)
   if(TFLITE_INCLUDE_DIR AND TFLITE_C_LIB)
-    target_include_directories(brim_pipeline PRIVATE ${TFLITE_INCLUDE_DIR})
+    target_include_directories(brim_pipeline PRIVATE ${TFLITE_INCLUDE_DIR}
+                               ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tflite)  # vendored xnnpack_delegate.h
     target_link_libraries(brim_pipeline PUBLIC ${TFLITE_C_LIB})
     target_compile_definitions(brim_pipeline PRIVATE BRIM_WITH_TFLITE=1)
     message(STATUS "TFLite C API: ${TFLITE_INCLUDE_DIR}, ${TFLITE_C_LIB}")
