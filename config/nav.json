@@ -3,6 +3,6 @@
   "side_margin_frac": 0.33,
   "clear_min_width_frac": 0.25,
   "clear_max_area_frac": 0.04,
-  "decision_hold_ms": 1500,
-  "confirm_frames": 3
+  "decision_hold_ms": 800,
+  "confirm_frames": 2
 }
