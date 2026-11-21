@@ -67,6 +67,21 @@ add_library(brim_pipeline STATIC
   src/audio/speak_queue.cpp
 )
 target_link_libraries(brim_pipeline PUBLIC brim_common)
+# QNX Camera Framework (libcamapi) for the real webcam. Ships with the QNX 8.0 Pi image
+# (/usr/include/camera/camera_api.h, /usr/lib/libcamapi.so).
+if(BRIM_IS_QNX)
+  find_path(CAMAPI_INCLUDE_DIR camera/camera_api.h PATH_SUFFIXES include usr/include)
+  find_library(CAMAPI_LIB NAMES camapi PATH_SUFFIXES lib usr/lib)
+  if(CAMAPI_INCLUDE_DIR AND CAMAPI_LIB)
+    target_sources(brim_pipeline PRIVATE src/capture/camera_qnx.cpp)
+    target_include_directories(brim_pipeline PRIVATE ${CAMAPI_INCLUDE_DIR})
+    target_link_libraries(brim_pipeline PUBLIC ${CAMAPI_LIB})
+    target_compile_definitions(brim_pipeline PRIVATE BRIM_WITH_CAMAPI=1)
+    message(STATUS "Camera: libcamapi ${CAMAPI_LIB}")
+  else()
+    message(WARNING "libcamapi not found: brim will use the fake camera on QNX")
+  endif()
+endif()
 if(BRIM_WITH_TFLITE)
   # TODO(qnx-check): confirm the header and library names the tflite-runtime-dev package installs:
   #   on the Pi `apk info -L tflite-runtime-dev | grep -E 'c_api.h|\.so|\.a$'`. Extract the same

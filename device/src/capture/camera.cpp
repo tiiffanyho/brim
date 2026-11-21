@@ -34,9 +34,12 @@ std::unique_ptr<Camera> make_fake_camera(int fps, int width, int height) {
   return std::make_unique<FakeCamera>(fps, width, height);
 }
 
+#if !BRIM_WITH_CAMAPI
+// Built without libcamapi (laptop, or a QNX image without the camera headers): fall back to fake.
 std::unique_ptr<Camera> make_qnx_camera(int fps) {
-  BRIM_LOGW("capture", "QNX camera not implemented yet; using fake camera");  // TODO(hw)
+  BRIM_LOGW("capture", "built without libcamapi; using fake camera");
   return make_fake_camera(fps);
 }
+#endif  // the real one is in camera_qnx.cpp
 
 }  // namespace brim::capture

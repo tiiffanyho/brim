@@ -28,13 +28,10 @@ class Camera {
 // Synthetic grey frames at `fps`, used on the laptop and in fake mode.
 std::unique_ptr<Camera> make_fake_camera(int fps, int width = 640, int height = 480);
 
-// TODO(hw): real camera on the Pi 5 under QNX 8.0. No V4L2 on QNX!
-//   Options to evaluate (TODO(qnx-check) on the Pi):
-//   1. QNX Camera Framework / Sensor Framework (libcamapi: camera_open(), camera_start_viewfinder()
-//      or camera_register_resource + buffer callbacks) — check `ls /dev/camera*`, and whether the
-//      Pi 5 BSP ships a sensor config (sensor.conf) for the CSI camera module.
-//   2. USB UVC webcam via the QNX USB camera driver, if present in the BSP (`usb -v`).
-//   Convert to RGB with OpenCV 4.12 (oss.qnx.com) cv::cvtColor if the sensor gives YUV/NV12.
+// Real camera on the Pi 5 under QNX 8.0 (no V4L2 on QNX): the QNX Camera Framework (libcamapi)
+// reads the C270 through the `sensor` service, camera unit 5 by default (SENSOR_UNIT_5 in
+// /etc/config/sensor/sensor_rpi5.conf). Override with BRIM_CAMERA_UNIT=<n>. See camera_qnx.cpp.
+// grab() returns false after 1 s without a frame and reopens the camera every 2 s until it is back.
 std::unique_ptr<Camera> make_qnx_camera(int fps);
 
 }  // namespace brim::capture
