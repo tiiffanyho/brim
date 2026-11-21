@@ -17,9 +17,18 @@ runs on embedded hardware (not cloud).
 - **NOT NOW** Remembered places, maps, GPS routes, a rear camera.
 
 ## Hard constraints (never break these)
-- **No face recognition, no face embeddings, no names, no identity lookup, no stored photos.**
-  People are anonymous boxes with a throw-away `track_id`. Boxes live in memory for seconds; track
-  data is cleared within 30 minutes. Nothing about a person is ever written to disk.
+- **Only enrolled people are ever named; everyone else is anonymous. No stored photos.**
+  (Changed from "no face recognition" on branch `feat/face-recognition`; agreed by Gloriana,
+  Tiffany and Kim.) A person is an anonymous box with a throw-away `track_id`, said as "Person".
+  Someone who agreed can be enrolled with `scripts/faces/enrol.py <name> <photo>`: only their face
+  embedding is kept, in `data/faces/` on the device (git-ignored, never uploaded, synced or
+  committed; no photo is kept), and `scripts/faces/remove.py <name>` deletes it. Brim then says
+  only "<name> ahead, move left|right" or "<name> ahead, stop", and only on a sure match
+  (`config/faces.json`); if unsure it stays "Person". No face model runs while nobody is enrolled.
+  Faces of people who are not enrolled are compared in memory and dropped at once. Names travel
+  live in the optional `name` field and are never stored, logged or written to disk; boxes live in
+  memory for seconds and track data is cleared within 30 minutes. Recognition runs off the frame
+  path and never replaces or delays a safety alert.
 - Device code must run on **QNX OS 8.0** and use open-source AI modules from https://oss.qnx.com
   (mediapipe 0.10.26, tflite-runtime 2.21.0, OpenCV 4.12; optional whisper.cpp).
 - **No cloud services and no internet at runtime.** The only network is the local Wi-Fi link to our
