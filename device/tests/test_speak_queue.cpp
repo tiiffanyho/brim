@@ -8,48 +8,48 @@ static SpeechItem item(Priority p, const char* text, std::int64_t t) { return Sp
 TEST_CASE("priority order: safety > nav > info") {
   SpeakQueue q;
   q.push(item(Priority::Info, "Person on your left", 0));
-  q.push(item(Priority::Nav, "Step right", 0));
-  q.push(item(Priority::Safety, "Person close ahead", 0));
-  CHECK_EQ(q.pop_next(100)->text, "Person close ahead");
-  CHECK_EQ(q.pop_next(100)->text, "Step right");
+  q.push(item(Priority::Nav, "Move right", 0));
+  q.push(item(Priority::Safety, "Person ahead, move right", 0));
+  CHECK_EQ(q.pop_next(100)->text, "Person ahead, move right");
+  CHECK_EQ(q.pop_next(100)->text, "Move right");
   CHECK_EQ(q.pop_next(100)->text, "Person on your left");
   CHECK(!q.pop_next(100));
 }
 
 TEST_CASE("a direction is never spoken before the warning that caused it") {
   SpeakQueue q;
-  q.push(item(Priority::Nav, "Step right", 0));            // queued first...
-  q.push(item(Priority::Safety, "Chair close ahead", 1));  // ...but safety still goes first
-  CHECK_EQ(q.pop_next(10)->text, "Chair close ahead");
-  CHECK_EQ(q.pop_next(10)->text, "Step right");
+  q.push(item(Priority::Nav, "Move right", 0));            // queued first...
+  q.push(item(Priority::Safety, "Chair ahead, move left", 1));  // ...but safety still goes first
+  CHECK_EQ(q.pop_next(10)->text, "Chair ahead, move left");
+  CHECK_EQ(q.pop_next(10)->text, "Move right");
 }
 
 TEST_CASE("FIFO within a priority") {
   SpeakQueue q;
-  q.push(item(Priority::Nav, "Step right", 0));
+  q.push(item(Priority::Nav, "Move right", 0));
   q.push(item(Priority::Nav, "Clear path ahead", 1));
-  CHECK_EQ(q.pop_next(10)->text, "Step right");
+  CHECK_EQ(q.pop_next(10)->text, "Move right");
   CHECK_EQ(q.pop_next(10)->text, "Clear path ahead");
 }
 
 TEST_CASE("cues carry their event, to be stamped when sent") {
   SpeakQueue q;
   brim::schema::SafetyAlertEvent e;
-  e.text = "Person close ahead";
+  e.text = "Person ahead, move right";
   q.push(SpeechItem{Priority::Safety, e.text, 0, CueEvent{e}});
   auto it = q.pop_next(5);
   REQUIRE(it.has_value());
   REQUIRE(it->event.has_value());
   REQUIRE(std::holds_alternative<brim::schema::SafetyAlertEvent>(*it->event));
-  CHECK_EQ(std::get<brim::schema::SafetyAlertEvent>(*it->event).text, "Person close ahead");
+  CHECK_EQ(std::get<brim::schema::SafetyAlertEvent>(*it->event).text, "Person ahead, move right");
 }
 
 TEST_CASE("safety is never dropped for age; a stale direction is") {
   SpeakQueue q;
-  q.push(item(Priority::Safety, "Person close ahead", 0));
-  q.push(item(Priority::Nav, "Step right", 0));
-  CHECK_EQ(q.pop_next(5000)->text, "Person close ahead");  // 5 s old, still sent
-  CHECK(!q.pop_next(5000));                                // "Step right" 5 s late: dropped
+  q.push(item(Priority::Safety, "Person ahead, move right", 0));
+  q.push(item(Priority::Nav, "Move right", 0));
+  CHECK_EQ(q.pop_next(5000)->text, "Person ahead, move right");  // 5 s old, still sent
+  CHECK(!q.pop_next(5000));                                // "Move right" 5 s late: dropped
   CHECK_EQ(q.dropped_stale(), 1u);
 }
 
@@ -84,10 +84,10 @@ TEST_CASE("the info rate limit never delays nav or safety") {
   SpeakQueue q;
   q.push(item(Priority::Info, "a", 0));
   CHECK(q.pop_next(0).has_value());
-  q.push(item(Priority::Nav, "Step left", 100));
-  q.push(item(Priority::Safety, "Chair close ahead", 100));
-  CHECK_EQ(q.pop_next(200)->text, "Chair close ahead");
-  CHECK_EQ(q.pop_next(200)->text, "Step left");
+  q.push(item(Priority::Nav, "Move left", 100));
+  q.push(item(Priority::Safety, "Chair ahead, move left", 100));
+  CHECK_EQ(q.pop_next(200)->text, "Chair ahead, move left");
+  CHECK_EQ(q.pop_next(200)->text, "Move left");
 }
 
 TEST_CASE("settings change the info interval at runtime") {

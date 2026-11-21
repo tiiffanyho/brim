@@ -15,3 +15,8 @@ models/*.tflite
 models/*.task
 models/*.bin
 .dev-run.log
+# object accuracy test photos (teammates who agreed): local only, never committed
+data/object_test/
+models/*.onnx
+# enrolled faces: on the hat only, never committed, uploaded or synced
+data/faces/

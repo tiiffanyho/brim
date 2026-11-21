@@ -3,7 +3,7 @@
   "$id": "https://brim.local/events.schema.json",
   "title": "Brim events and API payloads",
   "description": "Single source of truth for every event (device -> app_server -> PWA) and every REST payload. Run `node shared/gen/generate.mjs` after editing. Timestamps named t_*_mono_ms are CLOCK_MONOTONIC milliseconds on the device; *_at fields are ISO-8601 UTC wall-clock strings. There is no identity anywhere in this schema: no names, no face data, no person ids. People are anonymous tracks that are forgotten within 30 minutes.",
-  "x-schema-version": 2,
+  "x-schema-version": 3,
   "$defs": {
     "Direction": {
       "description": "Where something is relative to the wearer's head, or which way to move.",
@@ -113,7 +113,8 @@
         "clear": { "type": "boolean", "description": "True only when `direction` is a direction we are sure about." },
         "direction": { "$ref": "#/$defs/Direction" },
         "text": { "type": "string", "description": "Exactly what was spoken, e.g. 'Clear path ahead' or 'Path unclear, stop'." },
-        "blocked": { "type": "array", "items": { "$ref": "#/$defs/Direction" }, "description": "Directions ruled out this decision." }
+        "blocked": { "type": "array", "items": { "$ref": "#/$defs/Direction" }, "description": "Directions ruled out this decision." },
+        "name": { "type": "string", "description": "First name of an ENROLLED person this is about (on-device face match against data/faces; see config/faces.json). Set only when the match is sure; absent for everyone else, who stays 'Person'. The phone says it in place of 'Person' ('Tiffany ahead, move left'). Live only: app_server never stores it, and `text` stays anonymous." }
       }
     },
     "SafetyAlertEvent": {
@@ -132,7 +133,8 @@
         "text": { "type": "string" },
         "direction": { "$ref": "#/$defs/Direction" },
         "proximity": { "$ref": "#/$defs/Proximity" },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "name": { "type": "string", "description": "First name of an ENROLLED person this is about (on-device face match against data/faces; see config/faces.json). Set only when the match is sure; absent for everyone else, who stays 'Person'. The phone says it in place of 'Person' ('Tiffany ahead, move left'). Live only: app_server never stores it, and `text` stays anonymous." }
       }
     },
     "FaultEvent": {

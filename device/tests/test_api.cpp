@@ -126,6 +126,13 @@ TEST_CASE("relay: valid events are stamped and stored, invalid dropped") {
       R"({"type":"safety_alert","seq":4,"source":"brim","t_mono_ms":8,"kind":"phone_raised","severity":"warning","text":"A phone is pointed at you","direction":"ahead"})",
       *f.db, f.state);
   CHECK(!out.empty());
+  // An enrolled person's name goes to the phone live and is never stored.
+  out = process_event(
+      R"({"type":"safety_alert","seq":5,"source":"brim","t_mono_ms":9,"kind":"person_close","severity":"critical","text":"Person ahead, move left","direction":"ahead","name":"Tiffany"})",
+      *f.db, f.state);
+  REQUIRE(!out.empty());
+  CHECK_EQ(json::parse(out)->get_string("name"), "Tiffany");
+  CHECK(f.call("GET", "/api/alerts").body.find("Tiffany") == std::string::npos);
   CHECK(process_event(R"({"type":"person_seen","seq":5})", *f.db, f.state).empty());
   CHECK(process_event(R"({"type":"person_recognized","seq":6,"source":"brim","t_mono_ms":9})", *f.db, f.state).empty());
   CHECK(process_event("garbage", *f.db, f.state).empty());
@@ -138,7 +145,8 @@ TEST_CASE("relay: valid events are stamped and stored, invalid dropped") {
   CHECK_EQ(act->as_array()[1].get_string("kind"), "person");
   CHECK(act->as_array()[1].find("display_name") == nullptr);  // no identity reaches the phone
   auto alerts = json::parse(f.call("GET", "/api/alerts").body);
-  CHECK_EQ(alerts->as_array().size(), 1u);
+  CHECK_EQ(alerts->as_array().size(), 2u);
+  CHECK_EQ(alerts->as_array()[0].get_string("text"), "Person ahead, move left");  // anonymous
   auto health = json::parse(f.call("GET", "/api/health").body);
   CHECK(health->get_bool("brim_connected"));
   CHECK(health->get_bool("db_ok"));

@@ -45,6 +45,7 @@
 #include "common/sysinfo.hpp"
 #include "common/timing.hpp"
 #include "detect/detector.hpp"
+#include "detect/faces.hpp"
 #include "ipc/bus.hpp"
 #include "nav/nav.hpp"
 #include "safety/safety_monitor.hpp"
@@ -81,6 +82,8 @@ struct Ctx {
   events::EventStamper stamper{"brim"};
   ipc::EventBus* bus = nullptr;
   audio::SpeakQueue* speak = nullptr;
+  config::FaceConfig faces;
+  faces::Recogniser* recog = nullptr;  // names enrolled people only; never null after startup
   Stats stats;
   std::atomic<bool> detect_healthy{true};  // written by the pipeline, read by the health thread
 
@@ -138,23 +141,27 @@ class FakeScenario {
       case 1:
         person(s::Direction::Left, s::Proximity::Near, 0.09, cap);
         break;
-      case 3:
-        alert(s::SafetyKind::PersonClose, s::Severity::Critical, "Person close ahead", s::Direction::Ahead, cap);
-        path(true, s::Direction::Right, "Clear path on your right, step right", {s::Direction::Ahead}, cap);
+      case 3: {  // a person close in front, the right side clear: one phrase, then the same call
+        const auto d = go(detect::Thing::Person, s::Direction::Right, {s::Direction::Ahead});
+        alert(s::SafetyKind::PersonClose, s::Severity::Critical, nav::warning_text(detect::Thing::Person, &d), cap);
+        path(true, s::Direction::Right, nav::text_for(d), {s::Direction::Ahead}, cap);
         break;
-      case 7:
-        alert(s::SafetyKind::ObjectClose, s::Severity::Warning, "Chair close ahead", s::Direction::Ahead, cap);
-        path(true, s::Direction::Left, "Chair ahead, step left", {s::Direction::Ahead, s::Direction::Right}, cap);
+      }
+      case 7: {
+        const auto d = go(detect::Thing::Chair, s::Direction::Left, {s::Direction::Ahead, s::Direction::Right});
+        alert(s::SafetyKind::ObjectClose, s::Severity::Warning, nav::warning_text(detect::Thing::Chair, &d), cap);
+        path(true, s::Direction::Left, nav::text_for(d), {s::Direction::Ahead, s::Direction::Right}, cap);
         break;
+      }
       case 10:
-        alert(s::SafetyKind::PhoneRaised, s::Severity::Warning, "A phone is pointed at you", s::Direction::Ahead, cap);
+        alert(s::SafetyKind::PhoneRaised, s::Severity::Warning, "A phone is pointed at you", cap);
         break;
       case 11:  // 10 s after the person at t=1: the earliest the info limit lets it through
         obstacle(s::ObstacleKind::Chair, s::Direction::Ahead, s::Proximity::Close, 0.26, cap);
         break;
       case 12:
-        path(false, s::Direction::Unknown, "Path unclear, stop", {s::Direction::Left, s::Direction::Ahead, s::Direction::Right},
-             cap);
+        path(false, s::Direction::Unknown, nav::kPathUnclear,
+             {s::Direction::Left, s::Direction::Ahead, s::Direction::Right}, cap);
         break;
       case 14:
         person(s::Direction::Right, s::Proximity::Close, 0.21, cap);
@@ -163,7 +170,7 @@ class FakeScenario {
         obstacle(s::ObstacleKind::Pole, s::Direction::Left, s::Proximity::Near, 0.08, cap);
         break;
       case 18:
-        path(true, s::Direction::Ahead, "Clear path ahead", {}, cap);
+        path(true, s::Direction::Ahead, nav::text_for(go(detect::Thing::Unknown, s::Direction::Ahead, {})), {}, cap);
         break;
       default:
         break;
@@ -205,19 +212,28 @@ class FakeScenario {
     if (c_.settings().announce_obstacles) c_.cue(audio::Priority::Info, e, std::string(s::to_string(k)) + " " + side(d), cap);
   }
 
-  void alert(s::SafetyKind k, s::Severity sev, const char* text, s::Direction d, std::int64_t cap) {
+  static nav::FrameDecision go(detect::Thing because, s::Direction d, std::vector<s::Direction> blocked) {
+    nav::FrameDecision f;
+    f.kind = nav::FrameDecision::Kind::Go;
+    f.direction = d;
+    f.blocked = std::move(blocked);
+    f.because = because;
+    return f;
+  }
+
+  void alert(s::SafetyKind k, s::Severity sev, const std::string& text, std::int64_t cap) {
     s::SafetyAlertEvent e;
     e.kind = k;
     e.severity = sev;
     e.text = text;
-    e.direction = d;
+    e.direction = s::Direction::Ahead;
     e.proximity = s::Proximity::Close;
     e.confidence = std::uniform_real_distribution<double>(0.80, 0.99)(rng_);
     e.t_capture_mono_ms = cap;
     c_.cue(audio::Priority::Safety, e, text, cap);
   }
 
-  void path(bool clear, s::Direction d, const char* text, std::vector<s::Direction> blocked, std::int64_t cap) {
+  void path(bool clear, s::Direction d, const std::string& text, std::vector<s::Direction> blocked, std::int64_t cap) {
     s::ClearPathEvent e;
     e.clear = clear;
     e.direction = d;
@@ -234,12 +250,13 @@ class FakeScenario {
   std::int64_t track_ = 0;
 };
 
-// Made-up chair boxes for --fake-chair, so the real nav code can be checked without a camera.
-// "cycle" walks through left, centre, right, all three, and nothing, 5 s each.
+// Made-up boxes for --fake-chair, so the real nav and safety code can be checked without a camera.
+// "cycle" walks through left, centre, right, all three, and nothing, 5 s each. "close" is a chair
+// close in front and "person" a person close in front on the left: both raise a close warning.
 void fake_chairs(const std::string& where, std::int64_t now_ms, std::vector<detect::Detection>& out) {
-  auto chair = [](float x, float y, float w, float h) {
+  auto chair = [](float x, float y, float w, float h, detect::Thing t = detect::Thing::Chair) {
     detect::Detection d;
-    d.thing = detect::Thing::Chair;
+    d.thing = t;
     d.box = detect::Box{x, y, w, h};
     d.score = 0.85f;
     return d;
@@ -258,6 +275,8 @@ void fake_chairs(const std::string& where, std::int64_t now_ms, std::vector<dete
   else if (w == "right") out = {right};
   else if (w == "all") out = {left, centre, right};
   else if (w == "far") out = {chair(0.45f, 0.60f, 0.10f, 0.15f)};  // tiny: no call
+  else if (w == "close") out = {chair(0.30f, 0.35f, 0.40f, 0.60f)};  // 24 % of the frame, in the corridor
+  else if (w == "person") out = {chair(0.12f, 0.15f, 0.36f, 0.80f, detect::Thing::Person)};  // 29 %, left of centre
 }
 
 // ------------------------------------------------------------------ threads
@@ -273,6 +292,8 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
   std::int64_t stats_window_start = timing::mono_ms();
   std::int64_t last_dets_log_ms = 0;
   std::vector<detect::Detection> dets;  // reused every frame: no per-frame allocation
+  std::vector<int> subjects;            // which track each safety alert is about
+  subjects.reserve(4);
   dets.reserve(32);
   capture::Frame frame;
   std::int64_t start = timing::mono_ms();
@@ -372,17 +393,34 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
     }
     const auto settings = c.settings();
 
-    // 1. Safety first: anything close in front, or a phone pointed at the wearer.
-    for (auto& alert : safety_mon.check(frame, dets)) {
+    // Decide the way out first, so a close warning can say it in one phrase. It is still queued
+    // after the warnings below, so a direction is never sent before the warning that made it
+    // necessary, and it only speaks once a call is confirmed over a few frames.
+    auto path = navigator.update(dets, now);
+
+    // 1. Safety first: anything close in front ("Person ahead, move left" with the side from the
+    //    confirmed call above, or "Person ahead, stop" / "Path unclear, stop" while unsure).
+    //    An enrolled person already recognised on this track is named in `name` (never in `text`,
+    //    which is what gets stored). Only a name that is already known: this never waits.
+    auto alerts = safety_mon.check(frame, dets, navigator.current(), &subjects);
+    for (std::size_t i = 0; i < alerts.size(); ++i) {
+      auto& alert = alerts[i];
       alert.t_capture_mono_ms = frame.t_capture_mono_ms;
-      c.cue(audio::Priority::Safety, alert, alert.text, frame.t_capture_mono_ms);
+      if (alert.kind == s::SafetyKind::PersonClose && i < subjects.size()) {
+        std::string name = c.recog->name_for(subjects[i], now);
+        if (!name.empty()) alert.name = std::move(name);
+      }
+      c.cue(audio::Priority::Safety, alert, alert.text, frame.t_capture_mono_ms);  // logs stay anonymous
     }
 
-    // 2. Navigation: the safest direction to move, or "Path unclear, stop". It runs after the
-    //    safety alerts above, so a direction is never queued before the warning that made it
-    //    necessary, and it only speaks once a call is confirmed over a few frames.
-    if (auto path = navigator.update(dets, now)) {
+    // 2. Navigation: the safest direction to move, or stop. The phone does not repeat it when it
+    //    is word for word the warning it just read.
+    if (path) {
       path->t_capture_mono_ms = frame.t_capture_mono_ms;
+      if (const auto* cur = navigator.current(); cur && cur->because == detect::Thing::Person) {
+        std::string name = c.recog->name_for(cur->because_track, now);
+        if (!name.empty()) path->name = std::move(name);
+      }
       const std::string text = path->text;
       c.cue(audio::Priority::Nav, *path, text, frame.t_capture_mono_ms);
       BRIM_LOGI("nav", "%s", text.c_str());
@@ -421,6 +459,10 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
         c.cue(audio::Priority::Info, e, std::string(s::to_string(*kind)) + " " + s::to_string(dir), frame.t_capture_mono_ms);
       }
     }
+    // 4. Faces, last and off the frame path: offer person boxes to the recogniser thread, which
+    //    takes one only when it is idle and somebody is enrolled. Nothing waits for it.
+    for (const auto& d : dets)
+      if (d.is_person() && d.score >= c.safety.min_confidence) c.recog->offer(frame, d, now);
     tracks.expire(now);
     c.stats.tracks = static_cast<std::int64_t>(tracks.active(now));
   }
@@ -478,6 +520,8 @@ void health_loop(Ctx& c, const char* camera_name, const char* detector_name) {
              std::string(detector_name) + ", " + std::to_string(c.stats.tracks.load()) + " tracks"),
         comp("safety", s::ComponentState::Stub),
         comp("speech", s::ComponentState::Ok, "spoken by the phone app"),
+        comp("faces", c.recog->status().rfind("unavailable", 0) == 0 ? s::ComponentState::Stub : s::ComponentState::Ok,
+             c.recog->status()),
         comp("ipc", s::ComponentState::Ok, std::string(ipc::backend_name()) + ", dropped " + std::to_string(c.bus->dropped())),
     };
     c.emit(h, 0);
@@ -544,7 +588,7 @@ int main(int argc, char** argv) {
     } else if (!std::strcmp(argv[i], "--hang-after") && i + 1 < argc) hang_after_ms = std::atoll(argv[++i]) * 1000;
     else if (!std::strcmp(argv[i], "--debug")) log::set_level(log::Level::Debug);
     else {
-      std::fprintf(stderr, "usage: brim [--fake] [--fake-chair left|centre|right|all|far|cycle] [--hang-after SECONDS] [--debug]\n");
+      std::fprintf(stderr, "usage: brim [--fake] [--fake-chair left|centre|right|all|far|close|person|cycle] [--hang-after SECONDS] [--debug]\n");
       return 2;
     }
   }
@@ -560,6 +604,7 @@ int main(int argc, char** argv) {
   c.safety = config::load_safety(config::config_dir() + "/safety.json");
   c.nav = config::load_nav(config::config_dir() + "/nav.json");
   c.detect = config::load_detect(config::config_dir() + "/detect.json");
+  c.faces = config::load_faces(config::config_dir() + "/faces.json");
 
   ipc::EventBus bus(events::kAppServerChannel);
   ipc::EventBus supervisor_bus(events::kSupervisorChannel, 4);
@@ -580,7 +625,9 @@ int main(int argc, char** argv) {
   dcfg.min_confidence = static_cast<float>(c.safety.min_confidence);
   dcfg.phone_min_confidence = static_cast<float>(c.safety.phone_min_confidence);
   auto det = use_hw ? detect::make_tflite_detector(dcfg) : detect::make_stub_detector();
-  auto safety_mon = use_hw ? safety::make_vision_safety_monitor(c.safety, c.nav) : safety::make_stub_safety_monitor();
+  // --fake-chair feeds made-up boxes through the real safety code too.
+  auto safety_mon = use_hw || !fake_chair.empty() ? safety::make_vision_safety_monitor(c.safety, c.nav)
+                                                  : safety::make_stub_safety_monitor();
   c.apply_settings(config::default_settings());  // until app_server sends the stored ones
 
   if (!cam->open()) {
@@ -597,6 +644,12 @@ int main(int argc, char** argv) {
 
   // TODO(qnx-check): pin the pipeline thread to its own core and raise its priority
   //   (pthread_setschedparam SCHED_RR; ThreadCtl(_NTO_TCTL_RUNMASK) for affinity on QNX).
+  // Names enrolled people only (config/faces.json, data/faces). Idle while nobody is enrolled.
+  faces::Recogniser recog(c.faces, faces::make_face_embedder(c.faces, c.app.models_dir));
+  recog.start();
+  c.recog = &recog;
+  BRIM_LOGI("brim", "faces: %s", recog.status().c_str());
+
   std::thread t_pipe(pipeline_loop, std::ref(c), std::ref(*cam), std::ref(*det), std::ref(*safety_mon), hang_after_ms);
   std::thread t_cues(cue_loop, std::ref(c));
   std::thread t_health(health_loop, std::ref(c), cam->name(), det->name());
@@ -610,5 +663,6 @@ int main(int argc, char** argv) {
   t_health.join();
   t_hb.join();
   t_cmd.join();
+  recog.stop();
   return 0;
 }

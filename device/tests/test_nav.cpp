@@ -57,24 +57,24 @@ TEST_CASE("config: nav thresholds are read from config/nav.json") {
   CHECK(cfg().confirm_frames >= 2 && cfg().confirm_frames <= 3);
 }
 
-TEST_CASE("a chair on the left gives 'step right'") {
+TEST_CASE("a chair on the left gives 'move right'") {
   nav::Navigator n(cfg(), kMinConf);
   std::int64_t t = 0;
   auto calls = feed(n, {chair_left()}, 10, t);
   REQUIRE(calls.size() == 1u);  // said once, not every frame
   CHECK(calls[0].clear);
   CHECK(calls[0].direction == s::Direction::Right);
-  CHECK_EQ(calls[0].text, std::string("Chair on your left, step right"));
+  CHECK_EQ(calls[0].text, std::string("Chair on your left, move right"));
   CHECK(has(calls[0].blocked, s::Direction::Left));
 }
 
-TEST_CASE("a chair on the right gives 'step left'") {
+TEST_CASE("a chair on the right gives 'move left'") {
   nav::Navigator n(cfg(), kMinConf);
   std::int64_t t = 0;
   auto calls = feed(n, {chair_right()}, 10, t);
   REQUIRE(calls.size() == 1u);
   CHECK(calls[0].direction == s::Direction::Left);
-  CHECK_EQ(calls[0].text, std::string("Chair on your right, step left"));
+  CHECK_EQ(calls[0].text, std::string("Chair on your right, move left"));
 }
 
 TEST_CASE("a chair ahead with one clear side gives that side") {
@@ -84,7 +84,7 @@ TEST_CASE("a chair ahead with one clear side gives that side") {
   REQUIRE(calls.size() == 1u);
   CHECK(calls[0].clear);
   CHECK(calls[0].direction == s::Direction::Left);
-  CHECK_EQ(calls[0].text, std::string("Chair ahead, step left"));
+  CHECK_EQ(calls[0].text, std::string("Chair ahead, move left"));
   CHECK(has(calls[0].blocked, s::Direction::Ahead));
   CHECK(has(calls[0].blocked, s::Direction::Right));
 
@@ -93,7 +93,7 @@ TEST_CASE("a chair ahead with one clear side gives that side") {
   calls = feed(n2, {chair_centre(), chair_left()}, 10, t);
   REQUIRE(calls.size() == 1u);
   CHECK(calls[0].direction == s::Direction::Right);
-  CHECK_EQ(calls[0].text, std::string("Chair ahead, step right"));
+  CHECK_EQ(calls[0].text, std::string("Chair ahead, move right"));
 }
 
 TEST_CASE("a chair ahead with both sides clear steps away from where it stands") {
@@ -149,7 +149,7 @@ TEST_CASE("a call needs confirm_frames matching frames") {
 TEST_CASE("a decision is held for decision_hold_ms; stop is never held back") {
   nav::Navigator n(cfg(), kMinConf);
   std::int64_t t = 0;
-  REQUIRE(feed(n, {chair_left()}, 5, t).size() == 1u);  // step right
+  REQUIRE(feed(n, {chair_left()}, 5, t).size() == 1u);  // move right
   // The chair is now on the right: the opposite advice waits for the hold to run out.
   const std::int64_t said_at = t - 5 * 66 + (cfg().confirm_frames - 1) * 66;
   std::vector<s::ClearPathEvent> calls;
@@ -186,7 +186,47 @@ TEST_CASE("phones and unsure boxes are never obstacles; unknown things are 'some
   CHECK_EQ(feed(n, {det(Thing::Chair, 0.35f, 0.5f, 0.3f, 0.45f, 0.40f)}, 10, t).size(), 0u);
   auto calls = feed(n, {det(Thing::Unknown, 0.05f, 0.45f, 0.22f, 0.45f)}, 10, t);
   REQUIRE(calls.size() == 1u);
-  CHECK_EQ(calls[0].text, std::string("Something on your left, step right"));
+  CHECK_EQ(calls[0].text, std::string("Something on your left, move right"));
+}
+
+TEST_CASE("a person in the way: 'Person ahead, move left|right', or 'Person ahead, stop' when no side is clear") {
+  nav::Navigator n(cfg(), kMinConf);
+  std::int64_t t = 0;
+  const auto person_centre = det(Thing::Person, 0.38f, 0.20f, 0.24f, 0.75f);
+  auto calls = feed(n, {person_centre, chair_right()}, 10, t);
+  REQUIRE(calls.size() == 1u);
+  CHECK_EQ(calls[0].text, std::string("Person ahead, move left"));
+
+  nav::Navigator n2(cfg(), kMinConf);
+  calls = feed(n2, {chair_left(), person_centre, chair_right()}, 10, t);
+  REQUIRE(calls.size() == 1u);
+  CHECK(!calls[0].clear);
+  CHECK_EQ(calls[0].text, std::string("Person ahead, stop"));
+}
+
+TEST_CASE("warning_text: one phrase with the confirmed side, otherwise stop") {
+  nav::FrameDecision go_left;
+  go_left.kind = nav::FrameDecision::Kind::Go;
+  go_left.direction = s::Direction::Left;
+  go_left.blocked = {s::Direction::Ahead, s::Direction::Right};
+  go_left.because = Thing::Chair;
+  CHECK_EQ(nav::warning_text(Thing::Person, &go_left), std::string("Person ahead, move left"));
+  CHECK_EQ(nav::warning_text(Thing::Chair, &go_left), std::string("Chair ahead, move left"));
+  CHECK_EQ(nav::warning_text(Thing::Unknown, &go_left), std::string("Something ahead, move left"));
+  // Not sure yet (no confirmed call), a stop call, or a call that does not go round the thing in
+  // front (clear ahead, or only a side was blocked): stop. Never a guessed side.
+  CHECK_EQ(nav::warning_text(Thing::Person, nullptr), std::string("Person ahead, stop"));
+  CHECK_EQ(nav::warning_text(Thing::Chair, nullptr), std::string("Path unclear, stop"));
+  nav::FrameDecision stop;
+  stop.kind = nav::FrameDecision::Kind::Stop;
+  CHECK_EQ(nav::warning_text(Thing::Person, &stop), std::string("Person ahead, stop"));
+  nav::FrameDecision ahead;
+  ahead.kind = nav::FrameDecision::Kind::Go;
+  ahead.direction = s::Direction::Ahead;
+  CHECK_EQ(nav::warning_text(Thing::Chair, &ahead), std::string("Path unclear, stop"));
+  nav::FrameDecision side_only = go_left;
+  side_only.blocked = {s::Direction::Right};
+  CHECK_EQ(nav::warning_text(Thing::Person, &side_only), std::string("Person ahead, stop"));
 }
 
 TEST_CASE("obstacles on both sides with a gap in the middle: clear path ahead") {

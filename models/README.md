@@ -3,14 +3,16 @@
 On-device AI models. **Nothing here is downloaded at runtime** (no internet on the hat). Copy the
 files here before `scripts/deploy.sh`; large binaries are git-ignored.
 
-**No face models.** Brim does not recognize faces: there is no face detector, no face embedding
-model and no identity lookup of any kind. A person is a box with a throw-away track id.
+**Face models only for people who enrolled** (agreed by Gloriana, Tiffany and Kim; see CLAUDE.md).
+They never run while nobody is enrolled, and strangers are never named.
 
 | File (planned) | Used by | Runtime |
 |---|---|---|
 | `efficientdet_lite0.tflite` (uint8, in use) | `src/detect` — person and object boxes | tflite-runtime 2.21.0 C API (oss.qnx.com) |
 | `hand_landmarker.task` | `src/safety` — is that phone being held up at me? | MediaPipe 0.10.26 |
 | `depth_estimation.tflite` (TBD) | `src/nav` — free space ahead, left and right | tflite-runtime 2.21.0 |
+| `face_detection_yunet_2023mar.onnx` | `src/detect/faces` — the face inside a person box | OpenCV 4.12 `FaceDetectorYN` (oss.qnx.com) |
+| `face_recognition_sface_2021dec.onnx` | `src/detect/faces` — embedding, matched against enrolled people | OpenCV 4.12 `FaceRecognizerSF` |
 
 The camera is the only sensor: there is no distance sensor, so "how close" comes from how much of
 the frame a box fills (and later from monocular depth), and every obstacle call is an estimate.
@@ -77,3 +79,25 @@ The detector uses the TFLite **C API** (`tensorflow/lite/c/c_api.h`: `TfLiteMode
 named `tensorflowlite_c`, `tensorflow-lite` or `tensorflowlite` under `BRIM_QNX_DEPS_PREFIX`. If
 the header is missing, the build still succeeds without detection and brim speaks "Brim cannot
 see" at startup. It never pretends the path is clear.
+
+## Face recognition of enrolled people (YuNet + SFace)
+
+Only for people who agreed and were enrolled with `scripts/faces/enrol.py`. Nothing here runs
+while `data/faces/` is empty. Both files are git-ignored (`models/*.onnx`).
+
+- **face_detection_yunet_2023mar.onnx** — OpenCV Zoo, MIT licence.
+  <https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx>
+  SHA-256 `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4` (232,589 bytes)
+- **face_recognition_sface_2021dec.onnx** — OpenCV Zoo, Apache License 2.0. 112x112 face -> 128-d
+  embedding; matched by cosine similarity against `match_threshold` in `config/faces.json` (0.363,
+  OpenCV's published threshold for SFace).
+  <https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx>
+  SHA-256 `0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79` (38,696,353 bytes)
+
+Timing (budget: detect <= 30 ms per frame; faces run on their own thread, at most once per person
+per second, so they never take frame time):
+
+| Where | YuNet (face in box) | SFace (embedding) | Notes |
+|---|---|---|---|
+| MacBook (Apple M4, OpenCV 4.12 Python, 4 threads) | 2.1 ms at 320x240 (4.9 ms at 640x480) | 5.6 ms | int8 versions were no faster here (2.0 / 6.1 ms) |
+| Pi 5, QNX 8.0 | **TODO(hw): measure** | **TODO(hw)** | brim logs "face check avg/max ms" every 20 checks |

@@ -37,6 +37,16 @@ describe("SpeechScheduler", () => {
     expect(said[1]?.at).toBeGreaterThanOrEqual(900);
   });
 
+  it("says a warning and its direction once when they are the same phrase", () => {
+    const { s, said, advance } = setup();
+    s.push("Tiffany ahead, move left.", "alert");
+    s.push("Tiffany ahead, move left.", "nav");
+    advance(3000);
+    expect(said.map((x) => [x.text, x.p])).toEqual([["Tiffany ahead, move left.", "assertive"]]);
+    s.push("Person ahead, stop.", "nav");
+    expect(said.at(-1)?.text).toBe("Person ahead, stop.");
+  });
+
   it("a direction does not wait for an info phrase", () => {
     const { s, said } = setup();
     s.push("Person on your left.", "info");
