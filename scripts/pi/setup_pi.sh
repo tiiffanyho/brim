@@ -108,6 +108,12 @@ say "5/6 Running the unit tests"
 # --- 4. Lay out the run folder -----------------------------------------------------------------
 say "6/6 Laying out $RUN"
 mkdir -p "$RUN/bin" "$RUN/config" "$RUN/data/migrations" "$RUN/app" "$RUN/models" "$RUN/audio"
+# QNX won't overwrite a program file while it runs ("Resource busy"), so stop Brim first.
+if sudo pidin 2>/dev/null | grep -q "brim-run/bin/supervisor" && [ -f "$RUN/stop.sh" ]; then
+  echo "  stopping the running Brim so its programs can be replaced"
+  sudo sh "$RUN/stop.sh" >/dev/null 2>&1
+  sleep 1
+fi
 cp "$BUILD/brim" "$BUILD/supervisor" "$RUN/bin/" || die "brim/supervisor binaries missing after the build"
 [ -f "$BUILD/app_server" ] && cp "$BUILD/app_server" "$RUN/bin/"
 cp "$REPO"/config/*.json "$RUN/config/"
