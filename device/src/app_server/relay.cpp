@@ -56,6 +56,11 @@ std::string process_event(const std::string& payload, Db& db, ServerState& state
       if ((ok = valid(*j, e, err)) && e.restart_count) state.restart_count = *e.restart_count;
       break;
     }
+    case s::BrimEventType::TrafficLightSeen: {
+      s::TrafficLightSeenEvent e;
+      ok = valid(*j, e, err);  // feasibility test: live only, nothing stored
+      break;
+    }
     case s::BrimEventType::Health: {
       s::HealthEvent e;
       if ((ok = valid(*j, e, err))) state.set_health(e);

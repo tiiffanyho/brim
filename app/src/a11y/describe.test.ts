@@ -37,6 +37,21 @@ describe("describeEvent", () => {
     expect(stop?.key).toBe("path:unclear");
   });
 
+  it("says a traffic light with one of three phrases only, politely, and never walk, cross, go or a direction", () => {
+    const tl = { ...base, type: "traffic_light_seen" as const, confidence: 0.8 };
+    // The device text is ignored: the phrase comes from `colour` alone.
+    const red = describeEvent({ ...tl, colour: "red", text: "Walk now, safe to cross" });
+    expect(red).toEqual({ text: "Traffic light ahead, red.", politeness: "polite", tier: "info", key: "traffic:1" });
+    expect(describeEvent({ ...tl, colour: "green", text: "" })?.text).toBe("Traffic light ahead, green.");
+    expect(describeEvent({ ...tl, colour: "unknown", text: "" })?.text).toBe("Traffic light ahead, colour unknown.");
+    // An unexpected colour from a newer device is "colour unknown", never a guess.
+    expect(describeEvent({ ...tl, colour: "amber" as never, text: "" })?.text).toBe("Traffic light ahead, colour unknown.");
+    for (const colour of ["red", "green", "unknown"] as const) {
+      const text = describeEvent({ ...tl, colour, text: "" })?.text ?? "";
+      expect(text).not.toMatch(/\b(walk|cross|crossing|go|safe|left|right|step|stop)\b/i);
+    }
+  });
+
   it("says where a person is without saying who they are", () => {
     const a = describeEvent({ ...base, type: "person_seen", track_id: 4, direction: "left", proximity: "close", confidence: 0.9 });
     expect(a).toEqual({ text: "Person on your left, close by.", politeness: "polite", tier: "info", key: "person:4" });

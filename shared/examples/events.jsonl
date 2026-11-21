@@ -4,3 +4,4 @@
 {"type":"safety_alert","seq":4,"source":"brim","t_mono_ms":1300,"t_capture_mono_ms":1255,"kind":"person_close","severity":"critical","text":"Person close ahead","direction":"ahead","proximity":"close","confidence":0.94}
 {"type":"fault","seq":5,"source":"supervisor","t_mono_ms":1400,"component":"brim","action":"restarting","message":"heartbeat missed for 1000 ms","restart_count":1}
 {"type":"health","seq":6,"source":"brim","t_mono_ms":1500,"uptime_s":12.5,"fps":15,"cpu_pct":41.5,"temp_c":52,"pipeline_latency_ms":48,"speak_queue_len":0,"components":[{"name":"capture","state":"stub"},{"name":"detect","state":"ok","detail":"fake"}]}
+{"type":"traffic_light_seen","seq":7,"source":"brim","t_mono_ms":1600,"t_capture_mono_ms":1550,"track_id":9,"colour":"red","confidence":0.71,"colour_share":0.12,"text":"Traffic light ahead, red"}

@@ -126,6 +126,11 @@ TEST_CASE("relay: valid events are stamped and stored, invalid dropped") {
       R"({"type":"safety_alert","seq":4,"source":"brim","t_mono_ms":8,"kind":"phone_raised","severity":"warning","text":"A phone is pointed at you","direction":"ahead"})",
       *f.db, f.state);
   CHECK(!out.empty());
+  // Traffic light feasibility test: relayed live to the phone, never stored (activity stays 2 below).
+  out = process_event(
+      R"({"type":"traffic_light_seen","seq":5,"source":"brim","t_mono_ms":9,"colour":"red","confidence":0.7,"text":"Traffic light ahead, red"})",
+      *f.db, f.state);
+  CHECK(!out.empty());
   CHECK(process_event(R"({"type":"person_seen","seq":5})", *f.db, f.state).empty());
   CHECK(process_event(R"({"type":"person_recognized","seq":6,"source":"brim","t_mono_ms":9})", *f.db, f.state).empty());
   CHECK(process_event("garbage", *f.db, f.state).empty());

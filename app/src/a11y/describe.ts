@@ -1,6 +1,6 @@
 // Turns events into short sentences for screen readers. Pure functions (unit-tested).
 // Phrases are kept short: the wearer hears them while walking.
-import type { BrimEvent, Direction, ObstacleKind, Proximity } from "@schema";
+import type { BrimEvent, Direction, ObstacleKind, Proximity, TrafficColour } from "@schema";
 import type { Tier } from "./speech";
 
 export type Politeness = "polite" | "assertive";
@@ -58,6 +58,17 @@ export function obstacleWords(k: ObstacleKind): string {
   return OBSTACLE_WORDS[k] ?? "Something";
 }
 
+/**
+ * Traffic light feasibility test. The only three things the phone may ever say about a traffic
+ * light, built from `colour` (never from the device's free text): never walk, cross, go or safe to
+ * cross, and never a direction.
+ */
+export const TRAFFIC_PHRASES: Record<TrafficColour, string> = {
+  red: "Traffic light ahead, red.",
+  green: "Traffic light ahead, green.",
+  unknown: "Traffic light ahead, colour unknown.",
+};
+
 /** "Person on your left, close by." — joins the parts we actually have. */
 function sentence(subject: string, d: Direction, p: Proximity): string {
   const parts = [directionWords(d), proximityWords(p)].filter(Boolean);
@@ -90,6 +101,11 @@ export function describeEvent(e: BrimEvent): Announcement | null {
         return { text: `${short}.`, politeness: "polite", tier: "status", key: `fault:${e.component}` };
       }
       return null;
+    case "traffic_light_seen":
+      // Polite, waits for silence, dropped if late (info tier): it never interrupts or replaces a
+      // warning or a direction. The Pi already sends at most one per light per 10 s, so the key is
+      // per event and the phone does not hold it back further.
+      return { text: TRAFFIC_PHRASES[e.colour] ?? TRAFFIC_PHRASES.unknown, politeness: "polite", tier: "info", key: `traffic:${e.seq}` };
     case "health": // far too chatty to say
       return null;
   }

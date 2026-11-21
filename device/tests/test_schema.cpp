@@ -61,11 +61,12 @@ TEST_CASE("all example events parse and round-trip") {
       case BrimEventType::SafetyAlert: ok = roundtrip<SafetyAlertEvent>(*j); break;
       case BrimEventType::Fault: ok = roundtrip<FaultEvent>(*j); break;
       case BrimEventType::Health: ok = roundtrip<HealthEvent>(*j); break;
+      case BrimEventType::TrafficLightSeen: ok = roundtrip<TrafficLightSeenEvent>(*j); break;
     }
     CHECK(ok);
     n++;
   }
-  CHECK_EQ(n, 6);
+  CHECK_EQ(n, 7);
 }
 
 TEST_CASE("missing required field is rejected") {

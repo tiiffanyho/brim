@@ -3,7 +3,7 @@
   "$id": "https://brim.local/events.schema.json",
   "title": "Brim events and API payloads",
   "description": "Single source of truth for every event (device -> app_server -> PWA) and every REST payload. Run `node shared/gen/generate.mjs` after editing. Timestamps named t_*_mono_ms are CLOCK_MONOTONIC milliseconds on the device; *_at fields are ISO-8601 UTC wall-clock strings. There is no identity anywhere in this schema: no names, no face data, no person ids. People are anonymous tracks that are forgotten within 30 minutes.",
-  "x-schema-version": 2,
+  "x-schema-version": 3,
   "$defs": {
     "Direction": {
       "description": "Where something is relative to the wearer's head, or which way to move.",
@@ -28,6 +28,11 @@
     "Severity": {
       "type": "string",
       "enum": ["info", "warning", "critical"]
+    },
+    "TrafficColour": {
+      "description": "The lit colour of a traffic light, from the colour of the box crop. `unknown` whenever the colour check is not confident (or the light is off or amber).",
+      "type": "string",
+      "enum": ["red", "green", "unknown"]
     },
     "FaultAction": {
       "description": "What the system did about a fault.",
@@ -97,6 +102,24 @@
         "proximity": { "$ref": "#/$defs/Proximity" },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "area_frac": { "type": "number" }
+      }
+    },
+    "TrafficLightSeenEvent": {
+      "description": "Feasibility test only (config/traffic.json, off by default): a traffic light is in view. Reports what was seen, nothing more: never walk, cross, go or safe to cross, and never a direction (there is no direction field on purpose). Spoken only as 'Traffic light ahead, red', 'Traffic light ahead, green' or 'Traffic light ahead, colour unknown'. Live only, never stored.",
+      "type": "object",
+      "required": ["type", "seq", "source", "t_mono_ms", "colour", "confidence", "text"],
+      "properties": {
+        "type": { "const": "traffic_light_seen" },
+        "seq": { "type": "integer" },
+        "source": { "type": "string" },
+        "t_mono_ms": { "type": "integer" },
+        "t_capture_mono_ms": { "type": "integer" },
+        "t_relay_mono_ms": { "type": "integer" },
+        "track_id": { "type": "integer" },
+        "colour": { "$ref": "#/$defs/TrafficColour" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Detector score for the traffic light box." },
+        "colour_share": { "type": "number", "description": "Fraction of the box that is bright pixels of the reported colour (0 when unknown)." },
+        "text": { "type": "string", "description": "Exactly one of the three allowed phrases." }
       }
     },
     "ClearPathEvent": {
@@ -179,7 +202,8 @@
         { "$ref": "#/$defs/ClearPathEvent" },
         { "$ref": "#/$defs/SafetyAlertEvent" },
         { "$ref": "#/$defs/FaultEvent" },
-        { "$ref": "#/$defs/HealthEvent" }
+        { "$ref": "#/$defs/HealthEvent" },
+        { "$ref": "#/$defs/TrafficLightSeenEvent" }
       ]
     },
 

@@ -13,7 +13,7 @@
 namespace brim::schema {
 
 using brim::json::Value;
-inline constexpr int kSchemaVersion = 2;
+inline constexpr int kSchemaVersion = 3;
 
 // Where something is relative to the wearer's head, or which way to move.
 enum class Direction { Left, Ahead, Right, Unknown };
@@ -112,6 +112,23 @@ inline bool from_string(std::string_view s, Severity& out) {
   if (s == "info") { out = Severity::Info; return true; }
   if (s == "warning") { out = Severity::Warning; return true; }
   if (s == "critical") { out = Severity::Critical; return true; }
+  return false;
+}
+
+// The lit colour of a traffic light, from the colour of the box crop. `unknown` whenever the colour check is not confident (or the light is off or amber).
+enum class TrafficColour { Red, Green, Unknown };
+inline const char* to_string(TrafficColour v) {
+  switch (v) {
+    case TrafficColour::Red: return "red";
+    case TrafficColour::Green: return "green";
+    case TrafficColour::Unknown: return "unknown";
+  }
+  return "";
+}
+inline bool from_string(std::string_view s, TrafficColour& out) {
+  if (s == "red") { out = TrafficColour::Red; return true; }
+  if (s == "green") { out = TrafficColour::Green; return true; }
+  if (s == "unknown") { out = TrafficColour::Unknown; return true; }
   return false;
 }
 
@@ -233,6 +250,7 @@ inline bool fail(std::string* err, const char* type, const char* field) {
 struct ComponentStatus;
 struct PersonSeenEvent;
 struct ObstacleSeenEvent;
+struct TrafficLightSeenEvent;
 struct ClearPathEvent;
 struct SafetyAlertEvent;
 struct FaultEvent;
@@ -252,6 +270,8 @@ inline Value to_json(const PersonSeenEvent& v);
 inline bool from_json(const Value& j, PersonSeenEvent& out, std::string* err = nullptr);
 inline Value to_json(const ObstacleSeenEvent& v);
 inline bool from_json(const Value& j, ObstacleSeenEvent& out, std::string* err = nullptr);
+inline Value to_json(const TrafficLightSeenEvent& v);
+inline bool from_json(const Value& j, TrafficLightSeenEvent& out, std::string* err = nullptr);
 inline Value to_json(const ClearPathEvent& v);
 inline bool from_json(const Value& j, ClearPathEvent& out, std::string* err = nullptr);
 inline Value to_json(const SafetyAlertEvent& v);
@@ -312,6 +332,21 @@ struct ObstacleSeenEvent {
   Proximity proximity{};
   double confidence = 0;
   std::optional<double> area_frac;
+};
+
+// Feasibility test only (config/traffic.json, off by default): a traffic light is in view. Reports what was seen, nothing more: never walk, cross, go or safe to cross, and never a direction (there is no direction field on purpose). Spoken only as 'Traffic light ahead, red', 'Traffic light ahead, green' or 'Traffic light ahead, colour unknown'. Live only, never stored.
+struct TrafficLightSeenEvent {
+  static constexpr const char* kType = "traffic_light_seen";
+  std::int64_t seq = 0;
+  std::string source;
+  std::int64_t t_mono_ms = 0;
+  std::optional<std::int64_t> t_capture_mono_ms;
+  std::optional<std::int64_t> t_relay_mono_ms;
+  std::optional<std::int64_t> track_id;
+  TrafficColour colour{};
+  double confidence = 0;  // Detector score for the traffic light box.
+  std::optional<double> colour_share;  // Fraction of the box that is bright pixels of the reported colour (0 when unknown).
+  std::string text;  // Exactly one of the three allowed phrases.
 };
 
 // Where it is safe to move. `clear` false means no direction is safe and the wearer is told 'Path unclear, stop' — never guess a direction.
@@ -511,6 +546,37 @@ inline bool from_json(const Value& j, ObstacleSeenEvent& out, std::string* err) 
   { const Value* x = j.find("proximity"); if (!x || !detail::dec(*x, out.proximity)) return detail::fail(err, "ObstacleSeenEvent", "proximity"); }
   { const Value* x = j.find("confidence"); if (!x || !detail::dec(*x, out.confidence)) return detail::fail(err, "ObstacleSeenEvent", "confidence"); }
   { const Value* x = j.find("area_frac"); if (x && !x->is_null()) { double t{}; if (!detail::dec(*x, t)) return detail::fail(err, "ObstacleSeenEvent", "area_frac"); out.area_frac = std::move(t); } else { out.area_frac.reset(); } }
+  return true;
+}
+
+inline Value to_json(const TrafficLightSeenEvent& v) {
+  Value o = Value::object();
+  o.set("type", Value("traffic_light_seen"));
+  o.set("seq", detail::enc(v.seq));
+  o.set("source", detail::enc(v.source));
+  o.set("t_mono_ms", detail::enc(v.t_mono_ms));
+  if (v.t_capture_mono_ms) o.set("t_capture_mono_ms", detail::enc(*v.t_capture_mono_ms));
+  if (v.t_relay_mono_ms) o.set("t_relay_mono_ms", detail::enc(*v.t_relay_mono_ms));
+  if (v.track_id) o.set("track_id", detail::enc(*v.track_id));
+  o.set("colour", detail::enc(v.colour));
+  o.set("confidence", detail::enc(v.confidence));
+  if (v.colour_share) o.set("colour_share", detail::enc(*v.colour_share));
+  o.set("text", detail::enc(v.text));
+  return o;
+}
+inline bool from_json(const Value& j, TrafficLightSeenEvent& out, std::string* err) {
+  if (!j.is_object()) { if (err) *err = "TrafficLightSeenEvent: not an object"; return false; }
+  { const Value* x = j.find("type"); if (!x || !x->is_string() || x->as_string() != "traffic_light_seen") return detail::fail(err, "TrafficLightSeenEvent", "type"); }
+  { const Value* x = j.find("seq"); if (!x || !detail::dec(*x, out.seq)) return detail::fail(err, "TrafficLightSeenEvent", "seq"); }
+  { const Value* x = j.find("source"); if (!x || !detail::dec(*x, out.source)) return detail::fail(err, "TrafficLightSeenEvent", "source"); }
+  { const Value* x = j.find("t_mono_ms"); if (!x || !detail::dec(*x, out.t_mono_ms)) return detail::fail(err, "TrafficLightSeenEvent", "t_mono_ms"); }
+  { const Value* x = j.find("t_capture_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "TrafficLightSeenEvent", "t_capture_mono_ms"); out.t_capture_mono_ms = std::move(t); } else { out.t_capture_mono_ms.reset(); } }
+  { const Value* x = j.find("t_relay_mono_ms"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "TrafficLightSeenEvent", "t_relay_mono_ms"); out.t_relay_mono_ms = std::move(t); } else { out.t_relay_mono_ms.reset(); } }
+  { const Value* x = j.find("track_id"); if (x && !x->is_null()) { std::int64_t t{}; if (!detail::dec(*x, t)) return detail::fail(err, "TrafficLightSeenEvent", "track_id"); out.track_id = std::move(t); } else { out.track_id.reset(); } }
+  { const Value* x = j.find("colour"); if (!x || !detail::dec(*x, out.colour)) return detail::fail(err, "TrafficLightSeenEvent", "colour"); }
+  { const Value* x = j.find("confidence"); if (!x || !detail::dec(*x, out.confidence)) return detail::fail(err, "TrafficLightSeenEvent", "confidence"); }
+  { const Value* x = j.find("colour_share"); if (x && !x->is_null()) { double t{}; if (!detail::dec(*x, t)) return detail::fail(err, "TrafficLightSeenEvent", "colour_share"); out.colour_share = std::move(t); } else { out.colour_share.reset(); } }
+  { const Value* x = j.find("text"); if (!x || !detail::dec(*x, out.text)) return detail::fail(err, "TrafficLightSeenEvent", "text"); }
   return true;
 }
 
@@ -783,7 +849,7 @@ inline bool from_json(const Value& j, ApiError& out, std::string* err) {
 }
 
 // Discriminator for BrimEvent (field "type").
-enum class BrimEventType { PersonSeen, ObstacleSeen, ClearPath, SafetyAlert, Fault, Health };
+enum class BrimEventType { PersonSeen, ObstacleSeen, ClearPath, SafetyAlert, Fault, Health, TrafficLightSeen };
 inline std::optional<BrimEventType> brimEvent_type_of(const Value& j) {
   const Value* t = j.find("type");
   if (!t || !t->is_string()) return std::nullopt;
@@ -794,6 +860,7 @@ inline std::optional<BrimEventType> brimEvent_type_of(const Value& j) {
   if (s == "safety_alert") return BrimEventType::SafetyAlert;
   if (s == "fault") return BrimEventType::Fault;
   if (s == "health") return BrimEventType::Health;
+  if (s == "traffic_light_seen") return BrimEventType::TrafficLightSeen;
   return std::nullopt;
 }
 
