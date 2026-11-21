@@ -30,6 +30,7 @@ struct NavThresholds {
   double clear_min_width_frac = 0.25;   // a gap narrower than this is not a path
   double clear_max_area_frac = 0.04;    // a direction with a bigger box in it is not clear
   std::int64_t decision_hold_ms = 1500; // keep a direction this long before changing our advice
+  int confirm_frames = 3;               // matching frames in a row before a call is spoken (2 or 3)
 };
 
 // Detector and tracker (config/detect.json). Confidence thresholds stay in SafetyThresholds.

@@ -19,6 +19,8 @@
 //   commands  : receives app_server commands (reload_settings, speak_pairing_pin).
 //
 // Flags: --fake            scripted fake events, no hardware (laptop default via scripts/dev.sh)
+//        --fake-chair <where>  fake mode, but made-up chair boxes go through the real detect ->
+//                          safety -> nav path: left | centre | right | all | far | cycle
 //        --hang-after <s>  demo: freeze the pipeline after s seconds (supervisor must restart us)
 //        SIGUSR1           demo: freeze the pipeline now
 #include <atomic>
@@ -41,6 +43,7 @@
 #include "common/timing.hpp"
 #include "detect/detector.hpp"
 #include "ipc/bus.hpp"
+#include "nav/nav.hpp"
 #include "safety/safety_monitor.hpp"
 
 using namespace brim;
@@ -71,6 +74,7 @@ struct Ctx {
   config::NavThresholds nav;
   config::DetectConfig detect;
   bool fake = false;
+  std::string fake_chair;  // non-empty: made-up boxes through the real path (see --fake-chair)
   events::EventStamper stamper{"brim"};
   ipc::EventBus* bus = nullptr;
   audio::SpeakQueue* speak = nullptr;
@@ -248,10 +252,37 @@ class FakeVad final : public audio::VoiceActivity {
   bool someone_talking() override { return (timing::mono_ms() / 1000) % 15 < 3; }
 };
 
+// Made-up chair boxes for --fake-chair, so the real nav code can be checked without a camera.
+// "cycle" walks through left, centre, right, all three, and nothing, 5 s each.
+void fake_chairs(const std::string& where, std::int64_t now_ms, std::vector<detect::Detection>& out) {
+  auto chair = [](float x, float y, float w, float h) {
+    detect::Detection d;
+    d.thing = detect::Thing::Chair;
+    d.box = detect::Box{x, y, w, h};
+    d.score = 0.85f;
+    return d;
+  };
+  const auto left = chair(0.05f, 0.45f, 0.22f, 0.45f);
+  const auto centre = chair(0.40f, 0.50f, 0.20f, 0.45f);
+  const auto right = chair(0.73f, 0.45f, 0.22f, 0.45f);
+  std::string w = where;
+  if (w == "cycle") {
+    static const char* steps[] = {"left", "none", "centre", "none", "right", "none", "all", "none"};
+    w = steps[(now_ms / 5000) % 8];
+  }
+  out.clear();
+  if (w == "left") out = {left};
+  else if (w == "centre" || w == "center") out = {centre};
+  else if (w == "right") out = {right};
+  else if (w == "all") out = {left, centre, right};
+  else if (w == "far") out = {chair(0.45f, 0.60f, 0.10f, 0.15f)};  // tiny: no call
+}
+
 // ------------------------------------------------------------------ threads
 void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::SafetyMonitor& safety_mon,
                    std::int64_t hang_after_ms) {
   FakeScenario fake(c);
+  nav::Navigator navigator(c.nav, c.safety.min_confidence);
   detect::TrackStore tracks(c.safety.track_forget_s * 1000, c.safety.repeat_suppress_s * 1000,
                             static_cast<float>(c.detect.track_match_iou), c.detect.track_match_window_ms,
                             static_cast<float>(c.detect.track_center_gate));
@@ -288,7 +319,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       fps_window_start = now;
     }
 
-    if (c.fake) {
+    if (c.fake && c.fake_chair.empty()) {
       fake.tick(now);
       continue;
     }
@@ -321,7 +352,8 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
     if (!pacer.tick()) continue;
 
     // Detection: resize -> invoke -> decode (timed inside the detector), then tracking.
-    det.detect(frame, dets);
+    if (c.fake_chair.empty()) det.detect(frame, dets);
+    else fake_chairs(c.fake_chair, now, dets);
     const std::int64_t t_track = timing::mono_ns();
     tracks.observe(dets, now);
     const double track_ms = static_cast<double>(timing::mono_ns() - t_track) / 1e6;
@@ -367,12 +399,16 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       c.say(audio::Priority::Safety, alert.text, frame.t_capture_mono_ms);
     }
 
-    // 2. Navigation: the safest direction to move, or "Path unclear, stop".
-    // `dets` holds this frame's people, obstacles and phones, each with a track id.
-    // TODO(ai): src/nav turns `dets` + NavThresholds into a ClearPathEvent and speaks it at
-    //   Priority::Nav, right after the safety alert that made it necessary. Until it exists brim
-    //   says nothing about direction rather than guessing one (rule: never give a direction we are
-    //   not sure of).
+    // 2. Navigation: the safest direction to move, or "Path unclear, stop". It runs after the
+    //    safety alerts above, so a direction is never queued before the warning that made it
+    //    necessary, and it only speaks once a call is confirmed over a few frames.
+    if (auto path = navigator.update(dets, now)) {
+      path->t_capture_mono_ms = frame.t_capture_mono_ms;
+      const std::string text = path->text;
+      c.emit(*path, frame.t_capture_mono_ms);
+      c.say(audio::Priority::Nav, text, frame.t_capture_mono_ms);
+      BRIM_LOGI("nav", "%s", text.c_str());
+    }
 
     // 3. Everything else, lowest priority, rate-limited per track.
     for (const auto& d : dets) {
@@ -514,13 +550,17 @@ void command_loop(Ctx& c) {
 int main(int argc, char** argv) {
   log::set_process_name("brim");
   bool fake = false;
+  std::string fake_chair;
   std::int64_t hang_after_ms = 0;
   for (int i = 1; i < argc; ++i) {
     if (!std::strcmp(argv[i], "--fake")) fake = true;
-    else if (!std::strcmp(argv[i], "--hang-after") && i + 1 < argc) hang_after_ms = std::atoll(argv[++i]) * 1000;
+    else if (!std::strcmp(argv[i], "--fake-chair") && i + 1 < argc) {
+      fake = true;
+      fake_chair = argv[++i];
+    } else if (!std::strcmp(argv[i], "--hang-after") && i + 1 < argc) hang_after_ms = std::atoll(argv[++i]) * 1000;
     else if (!std::strcmp(argv[i], "--debug")) log::set_level(log::Level::Debug);
     else {
-      std::fprintf(stderr, "usage: brim [--fake] [--hang-after SECONDS] [--debug]\n");
+      std::fprintf(stderr, "usage: brim [--fake] [--fake-chair left|centre|right|all|far|cycle] [--hang-after SECONDS] [--debug]\n");
       return 2;
     }
   }
@@ -531,6 +571,7 @@ int main(int argc, char** argv) {
 
   Ctx c;
   c.fake = fake;
+  c.fake_chair = fake_chair;
   c.app = config::load_app(config::config_dir() + "/app.json");
   c.safety = config::load_safety(config::config_dir() + "/safety.json");
   c.nav = config::load_nav(config::config_dir() + "/nav.json");
