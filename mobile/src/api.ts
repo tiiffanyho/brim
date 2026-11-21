@@ -2,18 +2,22 @@
 // but with an explicit hat address because a native app has no "same origin".
 // The session is the HttpOnly cookie set by POST /api/pair; iOS stores it and sends it with
 // every request and with the WebSocket upgrade, so JS never sees the token.
-import type { ApiError as ApiErrorBody, HealthResponse, PairResponse, Settings } from "@schema";
+import type { ActivityItem, Alert, ApiError as ApiErrorBody, HealthResponse, PairResponse, Settings } from "@schema";
 
 export const DEFAULT_PORT = 8080;
 
+// TODO(qnx-check): same switch as app/src/api/client.ts. If the QNX libwebsockets build lacks PUT,
+// set this to true: PUT is then sent as POST + X-HTTP-Method-Override.
+export const USE_METHOD_OVERRIDE = false;
+
 export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-    public readonly retryAfterS?: number,
-  ) {
+  readonly status: number;
+  readonly retryAfterS?: number;
+  constructor(status: number, message: string, retryAfterS?: number) {
     super(message);
     this.name = "ApiError";
+    this.status = status;
+    this.retryAfterS = retryAfterS;
   }
   get unauthorized(): boolean {
     return this.status === 401;
@@ -40,19 +44,29 @@ export function wsUrlFor(hatUrl: string): string {
   return `${hatUrl.replace(/^http/, "ws")}/ws`;
 }
 
+type Method = "GET" | "POST" | "PUT";
+
 export function makeApi(hatUrl: string) {
-  async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  async function request<T>(method: Method, path: string, body?: unknown): Promise<T> {
+    const headers: Record<string, string> = {};
+    let sendMethod: Method = method;
+    if (USE_METHOD_OVERRIDE && method === "PUT") {
+      headers["X-HTTP-Method-Override"] = method;
+      sendMethod = "POST";
+    }
+    if (body !== undefined) headers["Content-Type"] = "application/json";
     let res: Response;
     try {
       res = await fetch(`${hatUrl}/api${path}`, {
-        method,
-        headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+        method: sendMethod,
+        headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         credentials: "include",
       });
     } catch {
       throw new ApiError(0, "Can't reach your hat. Check that your phone is on the same Wi-Fi as the hat.");
     }
+    if (res.status === 204) return undefined as T;
     const text = await res.text();
     let json: unknown;
     try {
@@ -69,7 +83,15 @@ export function makeApi(hatUrl: string) {
   return {
     pair: (pin: string) => request<PairResponse>("POST", "/pair", { pin }),
     health: () => request<HealthResponse>("GET", "/health"),
+    activity: (limit = 100) => request<ActivityItem[]>("GET", `/activity?limit=${limit}`),
+    alerts: (limit = 100) => request<Alert[]>("GET", `/alerts?limit=${limit}`),
     settings: () => request<Settings>("GET", "/settings"),
+    saveSettings: (s: Settings) => request<Settings>("PUT", "/settings", s),
   };
 }
 export type HatApi = ReturnType<typeof makeApi>;
+
+/** A message for the wearer from any error thrown by the client. */
+export function errorText(e: unknown, fallback: string): string {
+  return e instanceof Error && e.message ? e.message : fallback;
+}

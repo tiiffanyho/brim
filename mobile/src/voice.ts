@@ -18,10 +18,15 @@ const silence = require("../assets/silence.wav") as number;
 
 let player: AudioPlayer | null = null;
 let rate = 1.0;
+let volume = 1.0;
 
-/** Speech rate from the hat's settings (0.5 - 2.0, 1.0 normal). */
-export function setSpeechRate(r: number): void {
-  rate = Math.min(2, Math.max(0.5, r));
+/** Safety warnings are never quieter than this, whatever the volume setting says. */
+export const ALERT_MIN_VOLUME = 0.5;
+
+/** Voice settings from the hat: speech_rate 0.5 - 2.0 (1.0 normal), volume 0 - 100. */
+export function setVoice(speechRate: number, volumePct: number): void {
+  rate = Math.min(2, Math.max(0.5, speechRate));
+  volume = Math.min(1, Math.max(0, volumePct / 100));
 }
 
 /**
@@ -32,6 +37,7 @@ export function say(text: string, politeness: Politeness): void {
   if (politeness === "assertive") void Speech.stop();
   Speech.speak(text, {
     rate,
+    volume: politeness === "assertive" ? Math.max(volume, ALERT_MIN_VOLUME) : volume,
     // Speak on the app's own audio session, which is active in the background and in silent mode.
     useApplicationAudioSession: true,
   });
