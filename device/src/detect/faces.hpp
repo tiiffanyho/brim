@@ -1,5 +1,5 @@
 // Face recognition of ENROLLED people only. Agreed by the team (Gloriana, Tiffany, Kim) on
-// branch feat/face-recognition; see CLAUDE.md for the rules this follows:
+// branch feat/face-recognition; see RULES.md for the rules this follows:
 //   * only people who enrolled (scripts/faces/enrol.py) are ever named; everyone else stays
 //     "Person", and a weak or ambiguous match is "unknown", never a guess;
 //   * enrolled embeddings live only on the hat in config faces_dir (git-ignored); no photo is kept,

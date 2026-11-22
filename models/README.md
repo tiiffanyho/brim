@@ -3,7 +3,7 @@
 On-device AI models. **Nothing here is downloaded at runtime** (no internet on the hat). Copy the
 files here before `scripts/deploy.sh`; large binaries are git-ignored.
 
-**Face models only for people who enrolled** (agreed by Gloriana, Tiffany and Kim; see CLAUDE.md).
+**Face models only for people who enrolled** (agreed by Gloriana, Tiffany and Kim; see RULES.md).
 They never run while nobody is enrolled, and strangers are never named.
 
 | File (planned) | Used by | Runtime |

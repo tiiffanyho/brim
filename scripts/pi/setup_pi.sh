@@ -61,7 +61,7 @@ install_one libuv-dev                                     || APP_SERVER=OFF  # l
 # For the AI detector (code person 1). Not needed to build today's code, so only warn.
 install_one tflite-runtime-dev || warn "tflite-runtime-dev missing: the detector can't be built yet"
 
-[ "$MISSING_CORE" = 0 ] || die "a core build tool is missing (see MISSING above). Send this output to Claude."
+[ "$MISSING_CORE" = 0 ] || die "a core build tool is missing (see MISSING above). Install it and run this script again."
 
 # The detector's model file is git-ignored (models/README.md has its source, licence and checksum).
 # Download it once (about 4.5 MB) and check it's exactly the expected file.
@@ -99,8 +99,8 @@ cmake -S "$REPO/device" -B "$BUILD" -G "$GEN_NAME" \
       -DCMAKE_CXX_COMPILER="$CXX_BIN" \
       -DBRIM_BUILD_TESTS=ON \
       -DBRIM_BUILD_APP_SERVER="$APP_SERVER" \
-  || die "cmake configure failed. Send the lines above to Claude."
-cmake --build "$BUILD" -j "$JOBS" || die "build failed. Send the first 'error:' lines above to Claude."
+  || die "cmake configure failed. See the lines above."
+cmake --build "$BUILD" -j "$JOBS" || die "build failed. See the first 'error:' lines above."
 
 say "5/6 Running the unit tests"
 (cd "$BUILD" && ctest --output-on-failure) || warn "some tests failed (see above) - Brim may still run; tell the team"

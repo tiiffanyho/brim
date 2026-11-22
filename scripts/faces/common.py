@@ -1,7 +1,7 @@
 """Shared by enrol.py, remove.py and list.py: config, safe paths and the face models.
 
 Face recognition of ENROLLED people only, agreed by the team (Gloriana, Tiffany, Kim); see
-CLAUDE.md. Embeddings live only on this machine in config faces_dir (data/faces, git-ignored).
+RULES.md. Embeddings live only on this machine in config faces_dir (data/faces, git-ignored).
 No photo is ever kept. The models are the same ones brim uses on the hat (OpenCV YuNet + SFace,
 models/README.md), so an embedding made here matches what the hat computes.
 """
