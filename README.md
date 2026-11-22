@@ -2,17 +2,21 @@
 
 A hat that keeps a blind or low-vision wearer safe and tells them the safest way to move. A
 Raspberry Pi 5 running **QNX 8.0** watches through a webcam, warns when a person or object is close
-in front ("person close ahead") or when a phone is pointed at the wearer, then says which way is
-safe ("step right") — or "Path unclear, stop" when nothing is. It also names obstacles and says
-where people are, without ever saying *who* they are. A phone PWA (VoiceOver/TalkBack-first) shows
-activity, alerts, settings and device health.
+in front, together with which way is safe ("Person ahead, move left", "Chair ahead, move right"),
+or "Path unclear, stop" when no way is. It also names obstacles and says where people are, without
+saying *who* they are unless that person enrolled. The Pi plays no sound: an iPhone app (`mobile/`)
+speaks with the phone's own voice, also with the phone locked, and a web app (`app/`,
+VoiceOver/TalkBack-first) shows activity, alerts, settings and device health.
 
 **Everything runs on the hat: no cloud, no internet, no recording. Only people who enrolled are
 ever named; everyone else stays "Person".**
 
-> Status: **skeleton + pipelines**. All plumbing works end to end with fake data; camera and AI
-> models are stubs marked `TODO(hw)`, `TODO(ai)` and `TODO(qnx-check)`. The Pi plays no sound:
-> the phone app speaks.
+> Status: **runs on the real hat.** On the Pi, the Logitech C270 is read through QNX's camera
+> library (`libcamapi`) at 15 fps, and EfficientDet-Lite0 runs on `tflite-runtime` from
+> oss.qnx.com with XNNPACK (about 75 ms per detection, down from about 360 ms without it).
+> Still to do, marked `TODO(hw)` / `TODO(ai)` / `TODO(qnx-check)`: the warning for a phone held up
+> toward the wearer, the Pi 5 hardware watchdog (a software watchdog runs for now), and drawing the
+> HDMI dashboard (the PIN is in the log and in `scripts/pi/check.sh` meanwhile).
 
 ## Privacy, in one paragraph
 
@@ -47,7 +51,7 @@ if a name reaches a stored or `person_seen` event, or face data reaches the sche
  │                       ──commands──► brim: reload_settings                         │
  └─────────────────────────────────────┬─────────────────────────────────────────────┘
                                        │ local Wi-Fi only, PIN pairing + HttpOnly cookie
-                                 Phone PWA (Activity · Alerts · Settings · Health)
+                     iPhone app (speaks) · web app (Activity · Alerts · Settings · Health)
 ```
 
 - **`shared/events.schema.json`** is the single source of truth. `node shared/gen/generate.mjs`
@@ -91,6 +95,8 @@ Things to try:
 | `scripts/fake_events.py` | Sends extra random events straight into app_server (handy for PWA-only work). |
 | `scripts/smoke_test.sh` | Full end-to-end check (also runs in CI). |
 | `scripts/laptop/brim_test.py live --say [--why]` | The hat's detector on the webcam, saying what brim would say (SAYS lines, from brim's own C++ via `device/tools/decide_probe`); names enrolled people. Nothing is saved. |
+| `scripts/laptop/brim_test.py live --camera http://<pi-ip>:8090` | The same, on the **hat's** camera: reads frames from a temporary test viewer on the Pi (`camview`, port 8090, not part of Brim, not in the repo). The window says *HAT CAMERA via Pi …*. |
+| `cd app && npm run camera` | Laptop camera as a stand-in hat in the browser (dev only); the iPhone app can link to it instead of a hat. |
 | `scripts/laptop/object_test.py data/object_test` | Detector accuracy per class (every class Brim maps) on labelled photos; paths in `config/object_test.json`, photos git-ignored. |
 | `scripts/laptop/object_live.py` | The same test live on the webcam: point it at things, press a key for what is there, get the per-class table. Untested classes are skipped. Nothing is saved. |
 | `cd device && ctest --preset host` | C++ unit tests: schema, detection geometry, privacy, speak queue, SQLite layer, REST API. |
@@ -98,7 +104,29 @@ Things to try:
 
 Dev data lives in `.dev/data` (git-ignored). Delete it to reset.
 
-## Deploy to the Pi
+## iPhone app
+
+```bash
+cd mobile && npm ci && npx expo start --dev-client --host lan
+```
+
+Debug builds load the app's screens from this server each time they open, so keep it running (same
+Wi-Fi as the phone). For a demo, install a Release build (`npx expo run:ios --device --configuration
+Release`), which needs no laptop. Pair with the hat's address (e.g. `172.20.10.14`) and the PIN.
+See `mobile/README.md`.
+
+## Set up on the Pi itself (no laptop toolchain)
+
+```bash
+cd ~/brim && sh scripts/pi/setup_pi.sh      # installs from oss.qnx.com, builds, tests, lays out ~/brim-run
+sudo sh ~/brim-run/start.sh                 # supervisor -> brim + app_server   (stop: sudo sh ~/brim-run/stop.sh)
+sh scripts/pi/check.sh                      # processes, camera fps, faults, PIN, chip temperature
+sudo sh scripts/pi/autostart.sh             # start Brim on every boot (off: ... autostart.sh off)
+```
+
+Plug the webcam into a blue USB 3.0 port before powering on.
+
+## Deploy to the Pi from a laptop
 
 ```bash
 source ~/qnx800/qnxsdp-env.sh                 # QNX SDP 8.0 (qcc/q++)
@@ -125,15 +153,18 @@ device/       C++17 + CMake. Presets: host, qnx-aarch64le (cmake/qnx-aarch64le.c
   src/app_server/          lws server, REST router (api.cpp), relay, SQLite (db.cpp), pairing
   src/dashboard/           HDMI demo dashboard stub (shows the PIN)
   tests/                   dependency-free unit tests (also buildable for QNX)
+  third_party/tflite/      vendored XNNPACK delegate header (TensorFlow v2.21.0, Apache 2.0)
 app/          Vite + React + TS PWA: src/api, src/screens, src/a11y; public/ manifest + service worker
+mobile/       Expo / React Native iPhone app: onboarding, Live, Settings; speaks with expo-speech
 data/migrations/  versioned SQLite schema (PRAGMA user_version)
-config/       safety.json (close/confidence thresholds), nav.json (clear-path thresholds), app.json
+config/       safety.json, nav.json, detect.json, faces.json, app.json
 models/       on-device models (see models/README.md)
-scripts/      dev.sh, deploy.sh, smoke_test.sh, fake_events.py, probe_model.py, pi/start.sh, pi/stop.sh
+scripts/      dev.sh, deploy.sh, smoke_test.sh, fake_events.py, probe_model.py
+  pi/         setup_pi.sh, start.sh, stop.sh, check.sh, autostart.sh, collect.c (labelled test photos)
+  laptop/     brim_test.py, object_test.py, object_live.py
+  faces/      enrol.py, remove.py, list.py
+RULES.md      the team's project rules
 ```
-
-`src/nav` (the clear-path decision) is the next phase; until it exists brim says nothing about
-direction in the real pipeline rather than guessing one.
 
 ## REST API (all under `/api`, cookie required except `/pair`)
 
