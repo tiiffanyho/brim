@@ -15,6 +15,9 @@ Live, on the webcam, with what brim would say (one SAYS line per warning or dire
     .dev/venv/bin/pip install "opencv-python==4.12.0.88"
     .dev/venv/bin/python scripts/laptop/brim_test.py live [--camera 0] [--say]
 
+With the camera on the hat instead: start the Pi's test viewer (camview, port 8090) and pass its
+address, e.g. --camera http://172.20.10.14:8090 (320x240 frames, upscaled to 640x480).
+
 The words come from brim itself: each frame's boxes go to device/build/host/decide_probe (built by
 `cd device && cmake --build --preset host`), which runs brim's own close warning and navigation code
 ("Person ahead, move left", "Chair ahead, move right", "Person ahead, stop", "Path unclear, stop").
@@ -234,9 +237,50 @@ class MacVoice:
             self.proc.wait(timeout=10)
 
 
+class HatFrames:
+    """The hat's own camera, read over the local Wi-Fi from the Pi's test viewer (camview).
+
+    Same calls as cv2.VideoCapture (isOpened / read / set / release), so live() treats it like a
+    webcam. Each frame is fetched, decoded in memory and upscaled to the hat's 640x480; nothing is
+    written to disk. Test use only: Brim itself never sends frames off the hat.
+    """
+
+    def __init__(self, url: str, cv2) -> None:
+        self.cv2 = cv2
+        self.url = url if url.endswith(".bmp") else url.rstrip("/") + "/frame.bmp"
+        self.ok = self._fetch() is not None
+
+    def _fetch(self):
+        import urllib.request
+        try:
+            with urllib.request.urlopen(f"{self.url}?{time.time():.3f}", timeout=3) as r:
+                buf = np.frombuffer(r.read(), dtype=np.uint8)
+        except OSError:
+            return None
+        img = self.cv2.imdecode(buf, self.cv2.IMREAD_COLOR)
+        return None if img is None else self.cv2.resize(img, (640, 480), interpolation=self.cv2.INTER_LINEAR)
+
+    def isOpened(self) -> bool:  # noqa: N802 (VideoCapture's name)
+        return self.ok
+
+    def read(self):
+        for _ in range(3):  # ride out a dropped Wi-Fi packet or two
+            img = self._fetch()
+            if img is not None:
+                return True, img
+        return False, None
+
+    def set(self, *_args) -> bool:
+        return False
+
+    def release(self) -> None:
+        pass
+
+
 def live(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="brim_test.py live", description="The hat's detector and words, live on the webcam.")
-    ap.add_argument("--camera", default="0", help="camera number, or a video file to replay")
+    ap.add_argument("--camera", default="0",
+                    help="camera number, a video file to replay, or the hat's test viewer, e.g. http://172.20.10.14:8090")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--say", action="store_true", help="speak the SAYS lines on the Mac")
@@ -263,7 +307,15 @@ def live(argv: list[str]) -> int:
         print("faces: nobody enrolled, no face model runs")
     voice = MacVoice(a.say)
     src = int(a.camera) if a.camera.isdigit() else a.camera
-    cap = cv2.VideoCapture(src)
+    hat = isinstance(src, str) and src.startswith("http")
+    source_label = (f"HAT CAMERA via Pi {src.split('//')[1].split('/')[0].split(':')[0]}" if hat
+                    else f"Mac camera {src}" if isinstance(src, int) else f"video file {os.path.basename(src)}")
+    if hat:
+        cap = HatFrames(src, cv2)
+        if not cap.isOpened():
+            sys.exit(f"no picture from {src}: is camview running on the Pi, and is this Mac on the same Wi-Fi?")
+    else:
+        cap = cv2.VideoCapture(src)
     if not cap.isOpened():
         sys.exit(f"camera {a.camera} did not open. On a Mac, allow camera access for your terminal "
                  "(System Settings > Privacy & Security > Camera) and run again.")
@@ -336,7 +388,9 @@ def live(argv: list[str]) -> int:
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (230, 230, 230), 2)
             cv2.rectangle(bgr, (0, 0), (w, 34), (20, 20, 20), -1)
             cv2.putText(bgr, f"SAYS: {last_said or '-'}", (10, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-            cv2.imshow("Brim live (nothing is saved)", bgr)
+            cv2.rectangle(bgr, (0, h - 28), (w, h), (20, 20, 20), -1)
+            cv2.putText(bgr, source_label, (10, h - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+            cv2.imshow(f"Brim live - {source_label} (nothing is saved)", bgr)
             if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                 break
     except KeyboardInterrupt:
