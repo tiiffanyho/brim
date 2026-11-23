@@ -17,6 +17,13 @@ if pidin 2>/dev/null | grep -q "bin/supervisor"; then
 fi
 
 # app_server is optional: setup_pi.sh skips it if sqlite/libwebsockets weren't available.
+# `sh start.sh preview`: brim also serves a small live camera preview on port 8090 for the laptop
+# (scripts/laptop/brim_test.py live --camera http://<pi>:8090). Demo only; off otherwise.
+if [ "${1:-}" = "preview" ]; then
+  export BRIM_PREVIEW_PORT=8090
+  echo "camera preview on: http://<pi>:8090/"
+fi
+
 APP_ARGS=""
 if [ -x "$DIR/bin/app_server" ]; then
   APP_ARGS="--app-server $DIR/bin/app_server --app-server-arg --static --app-server-arg $DIR/app/dist \

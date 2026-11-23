@@ -1,14 +1,16 @@
-// Settings (Figma, flat): how much Brim does, what to use it for, sensitivity, how often, what
+// Settings (Figma, flat): the mode (where Brim is used), how much Brim does, what to use it for, sensitivity, how often, what
 // happens, voice. The hat's settings (stored on the hat, shared with the web app) save as you change
-// them; the scale, speech and vibration are this phone's own.
+// them; the mode, scale, speech and vibration are this phone's own.
 import { useEffect, useRef, useState } from "react";
 import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { Settings } from "@schema";
 import { errorText } from "../api";
 import { useBrim, type Level } from "../BrimContext";
-import { Kicker, Scale, Seg, ToggleRow } from "../design";
+import { Bunny, Kicker, Scale, Seg, ToggleRow } from "../design";
 import { T, tight } from "../theme";
+import { MODES, modeOf, type Mode } from "../modes";
 import { useFocusTitle } from "../ui";
+import { say } from "../voice";
 
 const LEVELS = ["Detect only", "Warn", "Warn and guide"] as const;
 const LEVEL_TEXT = [
@@ -27,7 +29,7 @@ const SPACING = [[10, "10 s"], [30, "30 s"], [60, "1 min"]] as const;
 export type SubPage = "alerts" | "activity" | "health";
 
 export function SettingsScreen({ onDone, open }: { onDone: () => void; open: (p: SubPage) => void }) {
-  const { api, applySettings, hatUrl, forgetHat, source, level, setLevel, speaking, setSpeaking, vibrate, setVibrate, unreadAlerts } = useBrim();
+  const { api, applySettings, hatUrl, forgetHat, source, level, setLevel, speaking, setSpeaking, vibrate, setVibrate, unreadAlerts, mode, setMode } = useBrim();
   const title = useFocusTitle();
   const [s, setS] = useState<Settings | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +79,24 @@ export function SettingsScreen({ onDone, open }: { onDone: () => void; open: (p:
           <Text style={st.doneText}>Done</Text>
         </Pressable>
       </View>
+
+      <Label color={T.purple}>Mode</Label>
+      <View accessibilityRole="radiogroup" accessibilityLabel="Mode" style={st.card}>
+        {MODES.map((m, i) => (
+          <ModeRow
+            key={m.id}
+            mode={m}
+            on={m.id === mode}
+            position={`${i + 1} of ${MODES.length}`}
+            onPress={() => {
+              if (m.id === mode) return;
+              setMode(m.id);
+              say(`${modeOf(m.id).name} mode.`, "polite");
+            }}
+          />
+        ))}
+      </View>
+      <Text style={[st.note, { marginBottom: 26 }]}>Safety warnings and directions work the same in every mode.</Text>
 
       <View style={[st.card, { padding: 20, gap: 14 }]}>
         <Kicker>How much Brim does</Kicker>
@@ -168,6 +188,26 @@ function Label({ children, color = T.dark }: { children: string; color?: string 
   );
 }
 
+function ModeRow({ mode, on, position, onPress }: { mode: Mode; on: boolean; position: string; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityLabel={mode.name}
+      accessibilityHint={`${mode.blurb} Mode, ${position}.`}
+      accessibilityState={{ selected: on, checked: on }}
+      onPress={onPress}
+      style={[st.mode, on && { backgroundColor: mode.id === "everyday" ? T.tint : mode.wash }]}
+    >
+      <Bunny name={mode.bunny} size={40} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={[st.linkText, { color: mode.color }, on && { fontWeight: "800" }]}>{mode.name}</Text>
+        <Text style={st.modeSub}>{mode.blurb}</Text>
+      </View>
+      <View style={[st.radio, on && { borderColor: mode.color }]}>{on ? <View style={[st.radioDot, { backgroundColor: mode.color }]} /> : null}</View>
+    </Pressable>
+  );
+}
+
 function LinkRow({ label, value, hint, onPress, danger }: { label: string; value?: string; hint?: string; onPress: () => void; danger?: boolean }) {
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={value ? `${label}, ${value}` : label} accessibilityHint={hint} onPress={onPress} style={st.link}>
@@ -194,4 +234,8 @@ const st = StyleSheet.create({
   linkText: { flex: 1, color: T.ink, fontSize: 15, fontWeight: "600" },
   linkValue: { color: T.red, fontSize: 13, fontWeight: "700" },
   chev: { color: T.muted, fontSize: 22 },
+  mode: { flexDirection: "row", alignItems: "center", minHeight: 64, paddingHorizontal: 12, paddingVertical: 8, gap: 12, borderRadius: 18 },
+  modeSub: { color: T.muted, fontSize: 12, lineHeight: 16 },
+  radio: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: T.lavender, alignItems: "center", justifyContent: "center" },
+  radioDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: T.dark },
 });

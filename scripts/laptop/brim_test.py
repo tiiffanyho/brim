@@ -238,36 +238,47 @@ class MacVoice:
 
 
 class HatFrames:
-    """The hat's own camera, read over the local Wi-Fi from the Pi's test viewer (camview).
+    """The hat's own camera, read over the local Wi-Fi from the Pi (brim's demo preview, started with
+    `sudo sh start.sh preview`, or the older camview test viewer; both serve /frame.bmp on port 8090).
 
     Same calls as cv2.VideoCapture (isOpened / read / set / release), so live() treats it like a
     webcam. Each frame is fetched, decoded in memory and upscaled to the hat's 640x480; nothing is
-    written to disk. Test use only: Brim itself never sends frames off the hat.
+    written to disk. On a slow or dropped hotspot link it keeps showing the last good frame and keeps
+    trying, instead of closing the window; it only gives up after a minute with no frame at all.
     """
+
+    GIVE_UP_S = 60.0
 
     def __init__(self, url: str, cv2) -> None:
         self.cv2 = cv2
         self.url = url if url.endswith(".bmp") else url.rstrip("/") + "/frame.bmp"
+        self.last = None
+        self.last_ok = time.monotonic()
         self.ok = self._fetch() is not None
 
     def _fetch(self):
         import urllib.request
         try:
-            with urllib.request.urlopen(f"{self.url}?{time.time():.3f}", timeout=3) as r:
+            with urllib.request.urlopen(f"{self.url}?{time.time():.3f}", timeout=8) as r:
                 buf = np.frombuffer(r.read(), dtype=np.uint8)
         except OSError:
             return None
         img = self.cv2.imdecode(buf, self.cv2.IMREAD_COLOR)
-        return None if img is None else self.cv2.resize(img, (640, 480), interpolation=self.cv2.INTER_LINEAR)
+        if img is None:  # cut short by the Wi-Fi
+            return None
+        self.last = self.cv2.resize(img, (640, 480), interpolation=self.cv2.INTER_LINEAR)
+        self.last_ok = time.monotonic()
+        return self.last
 
     def isOpened(self) -> bool:  # noqa: N802 (VideoCapture's name)
         return self.ok
 
     def read(self):
-        for _ in range(3):  # ride out a dropped Wi-Fi packet or two
-            img = self._fetch()
-            if img is not None:
-                return True, img
+        img = self._fetch()
+        if img is not None:
+            return True, img
+        if self.last is not None and time.monotonic() - self.last_ok < self.GIVE_UP_S:
+            return True, self.last.copy()  # slow Wi-Fi: hold the last picture and try again
         return False, None
 
     def set(self, *_args) -> bool:

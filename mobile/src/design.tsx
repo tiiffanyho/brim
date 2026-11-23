@@ -5,10 +5,11 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { AccessibilityInfo, Animated, Image, ImageBackground, Pressable, StyleSheet, Text, View, type ViewStyle } from "react-native";
 import { BUNNY, GLOW, T, TONE_COLOR, tight, type BunnyName, type Tone } from "./theme";
 
-/** Full-screen soft glow behind a screen. */
-export function GlowPage({ tone = "calm", children, style }: { tone?: Tone; children: ReactNode; style?: ViewStyle }) {
+/** Full-screen soft glow behind a screen, optionally tinted (the mode's colour). */
+export function GlowPage({ tone = "calm", wash, children, style }: { tone?: Tone; wash?: string; children: ReactNode; style?: ViewStyle }) {
   return (
     <ImageBackground source={GLOW[tone]} resizeMode="cover" style={[s.page, style]} accessibilityIgnoresInvertColors>
+      {wash ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: wash }]} /> : null}
       {children}
     </ImageBackground>
   );
@@ -23,7 +24,7 @@ export function Bunny({ name, size, style }: { name: BunnyName; size: number; st
 }
 
 /** The little sound wave. Moves gently unless Reduce Motion is on. */
-export function Wave({ tone = "calm", small }: { tone?: Tone; small?: boolean }) {
+export function Wave({ tone = "calm", small, color }: { tone?: Tone; small?: boolean; color?: string }) {
   const heights = small ? [8, 16, 24, 12, 20, 10] : [10, 20, 32, 16, 26, 36, 18, 28, 12, 22, 14];
   const v = useRef(new Animated.Value(1)).current;
   useEffect(() => {
@@ -49,7 +50,7 @@ export function Wave({ tone = "calm", small }: { tone?: Tone; small?: boolean })
             width: small ? 3 : 4,
             height: h,
             borderRadius: 2,
-            backgroundColor: small ? T.purple : TONE_COLOR[tone],
+            backgroundColor: color ?? (small ? T.purple : TONE_COLOR[tone]),
             transform: [{ scaleY: i % 2 ? v : Animated.subtract(1.55, v) }],
           }}
         />

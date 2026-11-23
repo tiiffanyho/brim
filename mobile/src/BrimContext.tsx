@@ -13,6 +13,7 @@ import { ApiError, makeApi, wsUrlFor, type HatApi } from "./api";
 import { makeCameraApi } from "./camera";
 import { cameraWsUrl, levelAllows, type Level } from "./core/source";
 import { say, setVoice, startOnDuty, stopOnDuty } from "./voice";
+import { DEFAULT_MODE, isModeId, type ModeId } from "./modes";
 
 /** No health event for this long = connection lost (health_period_ms is 1000 in config/app.json). */
 export const HEALTH_TIMEOUT_MS = 3000;
@@ -21,6 +22,7 @@ const SPEAK_KEY = "brim.speak";
 const SOURCE_KEY = "brim.source";
 const LEVEL_KEY = "brim.level";
 const VIBRATE_KEY = "brim.vibrate";
+const MODE_KEY = "brim.mode";
 
 const MAX_RECENT = 12;
 
@@ -64,6 +66,9 @@ interface BrimState {
   setLevel: (l: Level) => void;
   vibrate: boolean;
   setVibrate: (on: boolean) => void;
+  /** Where Brim is being used (display only; see modes.ts). */
+  mode: ModeId;
+  setMode: (m: ModeId) => void;
 }
 
 const Ctx = createContext<BrimState | null>(null);
@@ -98,6 +103,7 @@ export function BrimProvider({ children }: { children: ReactNode }) {
   const [source, setSource] = useState<Source>("hat");
   const [level, setLevelState] = useState<Level>(2);
   const [vibrate, setVibrateState] = useState(true);
+  const [mode, setModeState] = useState<ModeId>(DEFAULT_MODE);
   const levelRef = useRef<Level>(2);
   const vibrateRef = useRef(true);
 
@@ -138,8 +144,8 @@ export function BrimProvider({ children }: { children: ReactNode }) {
   // Load the saved hat address and the speech switch once.
   useEffect(() => {
     void (async () => {
-      const [url, sp, src, lv, vib] = await Promise.all(
-        [HAT_URL_KEY, SPEAK_KEY, SOURCE_KEY, LEVEL_KEY, VIBRATE_KEY].map((k) => AsyncStorage.getItem(k)),
+      const [url, sp, src, lv, vib, md] = await Promise.all(
+        [HAT_URL_KEY, SPEAK_KEY, SOURCE_KEY, LEVEL_KEY, VIBRATE_KEY, MODE_KEY].map((k) => AsyncStorage.getItem(k)),
       );
       if (sp === "off") {
         speakingRef.current = false;
@@ -154,6 +160,7 @@ export function BrimProvider({ children }: { children: ReactNode }) {
         vibrateRef.current = false;
         setVibrateState(false);
       }
+      if (isModeId(md)) setModeState(md);
       setHatUrl(url ?? null);
       setConnection(url ? "offline" : "no-hat");
     })();
@@ -304,6 +311,11 @@ export function BrimProvider({ children }: { children: ReactNode }) {
     void AsyncStorage.setItem(VIBRATE_KEY, on ? "on" : "off");
   }, []);
 
+  const setMode = useCallback((m: ModeId) => {
+    setModeState(m);
+    void AsyncStorage.setItem(MODE_KEY, m);
+  }, []);
+
   const forgetHat = useCallback(async () => {
     await AsyncStorage.multiRemove([HAT_URL_KEY, SOURCE_KEY]);
     setSource("hat");
@@ -357,8 +369,10 @@ export function BrimProvider({ children }: { children: ReactNode }) {
       setLevel,
       vibrate,
       setVibrate,
+      mode,
+      setMode,
     }),
-    [hatUrl, api, connection, stream, linkLost, speaking, recent, health, liveHealth, faults, unreadAlerts, clearUnreadAlerts, subscribe, pair, forgetHat, setSpeaking, applySettings, source, connectCamera, level, setLevel, vibrate, setVibrate],
+    [hatUrl, api, connection, stream, linkLost, speaking, recent, health, liveHealth, faults, unreadAlerts, clearUnreadAlerts, subscribe, pair, forgetHat, setSpeaking, applySettings, source, connectCamera, level, setLevel, vibrate, setVibrate, mode, setMode],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

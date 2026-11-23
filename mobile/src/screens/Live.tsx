@@ -7,6 +7,7 @@ import type { ClearPathEvent, ObstacleSeenEvent, PersonSeenEvent } from "@schema
 import { useBrim, useLiveEvents } from "../BrimContext";
 import { Bunny, GlowPage, Rows, VoiceBar, Wave } from "../design";
 import { T, TONE_COLOR, tight, type Tone } from "../theme";
+import { modeOf } from "../modes";
 import { useFocusTitle } from "../ui";
 import { say } from "../voice";
 
@@ -18,7 +19,8 @@ const ALERT_HOLD_MS = 6000;
 const side = (d: string) => (d === "ahead" ? "ahead" : d === "unknown" ? "nearby" : `on your ${d}`);
 
 export function LiveScreen({ openSettings }: { openSettings: () => void }) {
-  const { recent, connection, linkLost, speaking, source, unreadAlerts, level } = useBrim();
+  const { recent, connection, linkLost, speaking, source, unreadAlerts, level, mode } = useBrim();
+  const m = modeOf(mode);
   const title = useFocusTitle();
   const [path, setPath] = useState<{ e: ClearPathEvent; at: number } | null>(null);
   const [obstacle, setObstacle] = useState<{ e: ObstacleSeenEvent; at: number } | null>(null);
@@ -47,7 +49,10 @@ export function LiveScreen({ openSettings }: { openSettings: () => void }) {
   const lastAlert = recent.find((r) => r.tier === "alert");
   const alertOn = !!lastAlert && now - lastAlert.at < ALERT_HOLD_MS;
   const ok = connection === "online" && !linkLost;
+  // The mode's colour while calm; a warning is always red and "connected again" green.
   const tone: Tone = alertOn ? "alert" : last?.tier === "status" && /again|connected/i.test(last.text) && now - last.at < 4000 ? "safe" : "calm";
+
+  const accent = tone === "calm" ? m.color : TONE_COLOR[tone];
 
   const status = !ok
     ? linkLost
@@ -58,10 +63,10 @@ export function LiveScreen({ openSettings }: { openSettings: () => void }) {
     : alertOn
       ? "Safety warning"
       : source === "camera"
-        ? "Laptop camera"
-        : "Hat connected";
+        ? `Laptop camera · ${m.name}`
+        : `Hat connected · ${m.name}`;
 
-  const quote = last?.text ?? (ok ? "Walk forward slowly. I'm watching the path." : "Connecting…");
+  const quote = last?.text ?? (ok ? m.idle : "Connecting…");
   const ob = obstacle && fresh(obstacle.at) ? obstacle.e : null;
   const ppl = [...people.values()].filter((p) => fresh(p.at)).map((p) => p.e);
   const p = path && fresh(path.at) ? path.e : null;
@@ -83,10 +88,10 @@ export function LiveScreen({ openSettings }: { openSettings: () => void }) {
   else if (!speaking) rows.push(["Speech", "Off. Turn on in Settings", "red"]);
 
   return (
-    <GlowPage tone={tone}>
+    <GlowPage tone={tone} wash={tone === "calm" ? m.wash : undefined}>
       <View style={l.wrap}>
         <View style={l.top}>
-          <Text accessibilityLiveRegion="polite" style={[l.status, { color: ok ? TONE_COLOR[tone] : T.red }]}>
+          <Text accessibilityLiveRegion="polite" style={[l.status, { color: ok ? accent : T.red }]}>
             {status.toUpperCase()}
           </Text>
           <Pressable
@@ -111,7 +116,7 @@ export function LiveScreen({ openSettings }: { openSettings: () => void }) {
         </View>
 
         <View style={l.says}>
-          <Wave tone={tone} />
+          <Wave tone={tone} color={accent} />
           <Text ref={title} accessibilityRole="header" style={l.hidden}>
             Brim says
           </Text>
@@ -120,7 +125,7 @@ export function LiveScreen({ openSettings }: { openSettings: () => void }) {
           </Text>
         </View>
 
-        <Bunny name="brim" size={170} style={l.bunny} />
+        <Bunny name={m.bunny} size={170} style={l.bunny} />
 
         <View style={{ gap: 14 }}>
           <Rows rows={rows} />

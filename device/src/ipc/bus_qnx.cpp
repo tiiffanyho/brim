@@ -7,10 +7,9 @@
 // low-priority app_server work done on behalf of brim briefly runs at brim's priority —
 // keep the receive path tiny (copy + reply), do the real work on another thread.
 //
-// TODO(qnx-check): this file has NOT been compiled yet. On the Pi (or with the SDP toolchain):
-//   cmake --preset qnx-aarch64le && cmake --build --preset qnx-aarch64le
-//   then run brim + app_server and confirm `ls /dev/name/local` shows brim_events, brim_cmd,
-//   brim_supervisor, and that `pidin` shows the receive threads RECEIVE-blocked.
+// Built on the Pi by scripts/pi/setup_pi.sh (or cross-compiled with the qnx-aarch64le preset).
+// To check it on the Pi: with brim + app_server running, `ls /dev/name/local` shows brim_events,
+// brim_cmd and brim_supervisor, and `pidin` shows the receive threads RECEIVE-blocked.
 #include <errno.h>
 #include <sys/dispatch.h>
 #include <sys/iomsg.h>

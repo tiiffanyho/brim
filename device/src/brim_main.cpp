@@ -25,6 +25,7 @@
 //                          safety -> nav path: left | centre | right | all | far | cycle
 //        --hang-after <s>  demo: freeze the pipeline after s seconds (supervisor must restart us)
 //        SIGUSR1           demo: freeze the pipeline now
+// Env:   BRIM_PREVIEW_PORT=8090  demo: serve a small live camera preview to the laptop (preview/)
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -38,6 +39,7 @@
 #include <vector>
 
 #include "audio/speak_queue.hpp"
+#include "preview/preview.hpp"
 #include "capture/camera.hpp"
 #include "common/config.hpp"
 #include "common/events.hpp"
@@ -84,6 +86,7 @@ struct Ctx {
   audio::SpeakQueue* speak = nullptr;
   config::FaceConfig faces;
   faces::Recogniser* recog = nullptr;  // names enrolled people only; never null after startup
+  preview::Preview* preview = nullptr;  // demo camera preview (BRIM_PREVIEW_PORT); null when off
   Stats stats;
   std::atomic<bool> detect_healthy{true};  // written by the pipeline, read by the health thread
 
@@ -313,6 +316,7 @@ void pipeline_loop(Ctx& c, capture::Camera& cam, detect::Detector& det, safety::
       timing::sleep_ms(50);
       continue;
     }
+    if (c.preview) c.preview->offer(frame);  // demo only; never blocks
     timing::StageTimer frame_budget("frame", 1000 / (c.app.capture_fps > 0 ? c.app.capture_fps : 15));
     const std::int64_t now = timing::mono_ms();
     c.stats.last_tick_ms = now;
@@ -654,6 +658,11 @@ int main(int argc, char** argv) {
   recog.start();
   c.recog = &recog;
   BRIM_LOGI("brim", "faces: %s", recog.status().c_str());
+
+  // Demo camera preview for the laptop (scripts/pi/start.sh preview): see preview/preview.hpp.
+  preview::Preview pv;
+  if (const char* port = std::getenv("BRIM_PREVIEW_PORT"); port && std::atoi(port) > 0 && pv.start(std::atoi(port)))
+    c.preview = &pv;
 
   std::thread t_pipe(pipeline_loop, std::ref(c), std::ref(*cam), std::ref(*det), std::ref(*safety_mon), hang_after_ms);
   std::thread t_cues(cue_loop, std::ref(c));

@@ -123,8 +123,15 @@ add_library(brim_dashboard STATIC src/dashboard/dashboard.cpp)
 target_link_libraries(brim_dashboard PUBLIC brim_common)
 
 # ---------------------------------------------------------------- executables
+# Demo camera preview for the laptop (BRIM_PREVIEW_PORT, off by default).
+add_library(brim_preview STATIC src/preview/preview.cpp)
+target_link_libraries(brim_preview PUBLIC brim_pipeline)
+if(BRIM_IS_QNX)
+  target_link_libraries(brim_preview PUBLIC socket)  # libsocket on QNX
+endif()
+
 add_executable(brim src/brim_main.cpp)
-target_link_libraries(brim PRIVATE brim_pipeline brim_ipc)
+target_link_libraries(brim PRIVATE brim_preview brim_ipc)  # brim_preview brings brim_pipeline
 
 # Laptop test tool: brim's decisions for detector rows on stdin (scripts/laptop/brim_test.py live).
 if(NOT BRIM_IS_QNX)
@@ -186,6 +193,7 @@ if(BRIM_BUILD_TESTS)
   endfunction()
   brim_test(test_schema brim_common)
   brim_test(test_speak_queue brim_pipeline)
+  brim_test(test_preview brim_preview)
   brim_test(test_privacy brim_pipeline)
   brim_test(test_detect brim_pipeline)
   brim_test(test_nav brim_pipeline)

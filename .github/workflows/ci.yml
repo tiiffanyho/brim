@@ -43,5 +43,5 @@ jobs:
       - name: Unit tests (schema, detection, privacy, speak queue, SQLite layer, API)
         working-directory: device
         run: ctest --preset host
-      - name: End-to-end smoke test (pairing, spoken PIN, REST, WebSocket, supervisor restart, settings)
+      - name: End-to-end smoke test (pairing, PIN on the dashboard only, REST, WebSocket, supervisor restart, settings)
         run: scripts/smoke_test.sh
